@@ -15,6 +15,7 @@ Built with Python, Tkinter, and NumPy — no external 3D tools required.
 - 🎨 Custom Palettes – Use .png palettes for different tree types
 - 🧩 Tabbed GUI – Switch between tree and pine generation in one app
 - 🎛️ Sliders for Everything – Size, twist, branch density, leafiness, and more
+- 🪟 Preview Window - Visualize your output in real-time before you generate
 - 💾 .VOX Export – Compatible with MagicaVoxel
 - 📁 Organized Output – Saves to output/tree/ and output/pine/
 
@@ -54,13 +55,13 @@ Each palette is a 256x1 PNG image with indexed colors.
 
 - Tree palettes: `palettes/tree/`
 - Pine palettes: `palettes/pine/`
-- Make sure to add new palettes to the internal dictionary in the script.
+- Make sure to add new palettes to the appropriate internal dictionary in the script.
 
 ## 👤 Credits
 
 Created by NGNT  
-With GUI and architecture support from ChatGPT 🤖  
-Inspired by nature. Powered by code.
+With GUI and architecture support from Cursor and ChatGPT 🤖
+Inspired by nature.
 
 ## 📜 License
 
