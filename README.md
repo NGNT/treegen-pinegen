@@ -60,7 +60,7 @@ Each palette is a 256x1 PNG image with indexed colors.
 ## 👤 Credits
 
 Created by NGNT  
-With GUI and architecture support from Cursor and ChatGPT 🤖
+With GUI and architecture support from Cursor and ChatGPT 🤖  
 Inspired by nature.
 
 ## 📜 License
