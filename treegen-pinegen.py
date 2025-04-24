@@ -337,7 +337,7 @@ def generate_pinegen_tree(params, palette_name):
     branchlength = clamp(params["branchlength"], 0, 3) * size * 20
     branchdir = clamp(params["branchdir"], -5, 5)
     leaves = clamp(params["leaves"], 0, 2)
-    trunk_width = size * params.get("trunksize", 2)
+    trunk_width = size * params.get("trunksize", 2) * 1.1  # slightly amplify trunk size strength
     max_iter = math.floor(100 * size / 5)
     fixed_size = 5
 
@@ -511,7 +511,8 @@ def generate_pinegen_preview(params, palette_name, grid_size=PREVIEW_GRID):
         shrink = grid_size / orig_GRID
         params_preview = params.copy()
         params_preview['size'] *= shrink
-        params_preview['trunksize'] *= shrink
+        # remove extra shrink on trunk size so thickness varies in preview
+        # params_preview['trunksize'] *= shrink
         params_preview['trunkheight'] *= shrink
         vox, palette = generate_pinegen_tree(params_preview, palette_name)
     finally:
@@ -547,6 +548,8 @@ def add_slider(parent, label, var, mn, mx, default, tooltip, status_var):
     if tooltip is not None:
         row.bind("<Enter>", lambda e: status_var.set(tooltip))
         row.bind("<Leave>", lambda e: status_var.set("Ready"))
+    # update displayed value whenever the variable changes
+    var.trace_add('write', lambda *args, v=var, lbl=val_label: lbl.config(text=f"{v.get():.2f}" if isinstance(v.get(), float) else str(v.get())))
     return row
 
 def build_treegen_gui(tab):
@@ -558,7 +561,7 @@ def build_treegen_gui(tab):
     preview_label_tree = ttk.Label(tab)
     preview_label_tree.pack(side="right", anchor="n", padx=(20,0), pady=(20,10))
 
-    ttk.Label(tab, text="Treegen v1.4 🌳 by NGNT", font=("Arial", 14, "bold")).pack()
+    ttk.Label(tab, text="Treegen v1.4.1 🌳 by NGNT", font=("Arial", 14, "bold")).pack()
 
     # === Palette dropdown
     tree_palette_path = resource_path("palettes/tree")
@@ -587,7 +590,7 @@ def build_treegen_gui(tab):
 
     slider_defs = [
         ("Size", controls["size"], 0.1, 3.0),
-        ("Trunk Size", controls["trunksize"], 0.1, 3.0),
+        ("Trunk Size", controls["trunksize"], 0.1, 1.2),
         ("Spread", controls["spread"], 0.0, 1.0),
         ("Twist", controls["twisted"], 0.0, 1.0),
         ("Leafiness", controls["leaves"], 0.0, 3.0),
@@ -635,6 +638,14 @@ def build_treegen_gui(tab):
     # initial preview
     update_preview()
 
+    # Randomize sliders
+    def randomize_sliders():
+        for _, var, mn, mx in slider_defs:
+            if isinstance(var, tk.DoubleVar):
+                var.set(random.uniform(mn, mx))
+            elif isinstance(var, tk.IntVar):
+                var.set(random.randint(int(mn), int(mx)))
+        update_preview()
     def generate():
         try:
             # Collect and validate parameters via dataclass
@@ -652,8 +663,11 @@ def build_treegen_gui(tab):
         except Exception as e:
             messagebox.showerror("Error", str(e))
             controls["status"].set("⚠️ Generation failed")
-
-    ttk.Button(tab, text="🌳 Generate Tree", command=generate).pack(pady=10)
+    # group Randomize and Generate side by side
+    btn_frame = ttk.Frame(tab)
+    btn_frame.pack(pady=10)
+    ttk.Button(btn_frame, text="🔀 Randomize", command=randomize_sliders).pack(side="left", padx=(0,5))
+    ttk.Button(btn_frame, text="🌳 Generate Tree", command=generate).pack(side="left")
     ttk.Label(tab, textvariable=controls["status"]).pack(pady=5)
 
     return controls
@@ -667,7 +681,7 @@ def build_pinegen_gui(tab):
     preview_label_pine = ttk.Label(tab)
     preview_label_pine.pack(side="right", anchor="n", padx=(20,0), pady=(20,10))
 
-    ttk.Label(tab, text="Pinegen v1.4 🌲 by NGNT", font=("Arial", 14, "bold")).pack()
+    ttk.Label(tab, text="Pinegen v1.4.1 🌲 by NGNT", font=("Arial", 14, "bold")).pack()
 
     pine_palette_path = resource_path("palettes/pine")
     palette_files = [f for f in os.listdir(pine_palette_path) if f.endswith(".png")]
@@ -748,6 +762,14 @@ def build_pinegen_gui(tab):
     # initial pine preview
     update_pine_preview()
 
+    # Randomize sliders
+    def randomize_sliders():
+        for _, var, mn, mx in slider_defs:
+            if isinstance(var, tk.DoubleVar):
+                var.set(random.uniform(mn, mx))
+            elif isinstance(var, tk.IntVar):
+                var.set(random.randint(int(mn), int(mx)))
+        update_pine_preview()
     def generate():
         try:
             # Collect and validate parameters via dataclass
@@ -765,8 +787,11 @@ def build_pinegen_gui(tab):
         except Exception as e:
             messagebox.showerror("Error", str(e))
             controls["status"].set("⚠️ Generation failed")
-
-    ttk.Button(tab, text="🌲 Generate Pine Tree", command=generate).pack(pady=10)
+    # group Randomize and Generate side by side
+    btn_frame = ttk.Frame(tab)
+    btn_frame.pack(pady=10)
+    ttk.Button(btn_frame, text="🔀 Randomize", command=randomize_sliders).pack(side="left", padx=(0,5))
+    ttk.Button(btn_frame, text="🌲 Generate Pine Tree", command=generate).pack(side="left")
     ttk.Label(tab, textvariable=controls["status"]).pack(pady=5)
 
     return controls
