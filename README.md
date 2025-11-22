@@ -4,67 +4,105 @@
 
 Procedural Voxel Tree + Pine Tree Generator for MagicaVoxel
 
-Generate beautiful, customizable .vox trees using palettes, sliders, and pure Python magic.
+Generate customizable .vox trees using palettes, sliders, and pure Python.
 
-Built with Python, Tkinter, and NumPy — no external 3D tools required.
+Built with Python, NumPy, and Pillow. The project now uses a PyQt6 GUI (`treegen_qt.py`) which calls the shared core in `treegen_core.py`.
 
 ## ✨ Features
 
-- 🌳 Treegen – Oak-style branching tree generator
-- 🌲 Pinegen – Pine tree generator with cone-shaped leaf clusters
-- 🎨 Custom Palettes – Use .png palettes for different tree types
-- 🧩 Tabbed GUI – Switch between tree and pine generation in one app
-- 🎛️ Sliders for Everything – Size, twist, branch density, leafiness, and more
-- 🪟 Preview Window - Visualize your output in real-time before you generate
-- 💾 .VOX Export – Compatible with MagicaVoxel
-- 📁 Organized Output – Saves to output/tree/ and output/pine/
+- Two generators
+  - Treegen — oak-style branching tree generator
+  - Pinegen — pine/conifer generator with cone-shaped leaf clusters
+- GUI
+  - PyQt6 UI: `treegen_qt.py` (menu, About dialog, inline status)
+- Real-time preview (low-res projection) with progress and cancellation
+- Export to MagicaVoxel `.vox` via `VoxExporter`
+- Custom palettes: use 256-color PNG palettes placed in `palettes/tree/` and `palettes/pine/`
+- Randomize presets and deterministic generation via seed
+- Organized output folders: `output/tree/` and `output/pine/`
+- "Open file after generation" option (platform-aware)
+- Non-modal export status displayed above each preview in the PyQt UI
 
-## 🚀 How to Run
+## Controls (implemented in the PyQt UI)
 
-1. Install dependencies
+Treegen sliders/controls and ranges:
+- `Size`: 0.1 — 3.0
+- `Trunk Size`: 0.1 — 1.2
+- `Spread`: 0.0 — 1.0
+- `Twist` (twisted): 0.0 — 1.0
+- `Leafiness`: 0.0 — 3.0
+- `Gravity`: -1.0 — 1.0
+- `Wide`: 0.0 — 1.0
+- `Iterations`: 5 — 15 (integer)
+- `Seed`: 1 — 9999
+
+Pinegen sliders/controls and ranges:
+- `Size`: 0.1 — 3.0
+- `Twist` (twisted): 0.0 — 4.0
+- `Trunk Size`: 1.0 — 3.0
+- `Trunk Height`: 0.0 — 5.0
+- `Branch Density`: 0.0 — 3.0
+- `Branch Length`: 0.0 — 3.0
+- `Branch Direction`: -5.0 — 5.0
+- `Leafiness`: 0.0 — 2.0
+- `Leaf Radius`: 1.0 — 4.0
+- `Leaf Stretch`: 0.5 — 3.0
+- `Leaf Bias`: -1.0 — 1.0
+- `Seed`: 1 — 9999
+
+Other UI features (PyQt6 port)
+- Menu bar: File → Close, Help → About (About shows app/version/credits)
+- Inline status: export results appear above the preview (`tree_dim_label`/`pine_dim_label`)
+- Preview uses `treegen_core.generate_*_preview` and runs in a worker QThread with progress signals and cooperative cancellation
+- Export runs in a separate process (ProcessPoolExecutor) and writes `.vox` files using `VoxExporter` (counter files: `treegen_counter.txt`, `pinegen_counter.txt`)
+
+## Code layout
+- `treegen_qt.py` — PyQt6 GUI (primary frontend)
+- `treegen_core.py` — shared generation logic, preview builders, and `VoxExporter`
+- `palettes/` — palette PNGs for tree and pine
+- `output/tree/`, `output/pine/` — generated .vox files
+
+## Requirements
+
+Minimum Python packages:
+- Python 3.8+
+- numpy
+- pillow
+- PyQt6
+
+Install with pip:
+
 ```bash
-pip install pillow numpy
+pip install numpy pillow PyQt6
 ```
 
-2. Run the app
-```bash
-python treegen-pinegen.py
-```
+## Run
 
-## Downloads
-
-You can also find the pre-compiled .exe under [Releases](https://github.com/NGNT/treegen-pinegen/releases) to get right in.
-
-## 🛠️ Build to .exe (Optional)
-
-You can compile it into a standalone executable using PyInstaller:
+PyQt6 UI (primary):
 
 ```bash
-pyinstaller --onefile --windowed --icon=treegen_icon.ico ^
-  --add-data "treegen_brand.png;." ^
-  --add-data "pinegen_brand.png;." ^
-  --add-data "palettes;palettes" ^
-  treegen-pinegen.py
+python treegen_qt.py
 ```
 
-> 💡 On macOS/Linux, replace `;` with `:` in --add-data paths.
+The PyQt UI calls into the shared core. Use the preview to iterate before exporting `.vox` files.
 
-## 🖼️ Palettes
+## Palettes
 
-Each palette is a 256x1 PNG image with indexed colors.
+Each palette is expected to be a 256-entry PNG (one-row palette). Place palettes in:
+- `palettes/tree/`
+- `palettes/pine/`
 
-- Tree palettes: `palettes/tree/`
-- Pine palettes: `palettes/pine/`
-- Make sure to add new palettes to the appropriate internal dictionary in the script.
+Palette mapping for leaves/trunk colors is defined in the core (see `TREE_PALETTE_MAP` and `PINE_PALETTE_MAP` in `treegen_core.py`).
 
-## 👤 Credits
+## Export & Output
 
-Created by NGNT  
-With GUI and architecture support from Cursor and ChatGPT 🤖  
-Inspired by nature.
+- Exports produce `.vox` files compatible with MagicaVoxel and are saved to `output/tree/` or `output/pine/`.
+- The exporter maintains a simple counter file (`treegen_counter.txt` / `pinegen_counter.txt`) to avoid overwriting files.
 
-## 📜 License
+## Credits
 
-MIT — Free to use, remix, and plant digital forests 🌳🌲
+Made by NGNT Creations
 
----
+## License
+
+MIT — Free to use and modify.
