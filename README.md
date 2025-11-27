@@ -1,28 +1,29 @@
 # 🌲 treegen-pinegen
 
-![treegen-pinegen logo](https://cdn.nostrcheck.me/46025249f65d47dddb0f17d93eb8b0a32d97fe3189c6684bbd33136a0a7e0424/43c1c30713b958352f4cbb2e60b45a0b94b95e67e3d449c91d0c4674b83446d7.webp)
-![treegen-pinegen logo](https://cdn.nostrcheck.me/46025249f65d47dddb0f17d93eb8b0a32d97fe3189c6684bbd33136a0a7e0424/152943f64e82f95415814b8a3f0ea7a216fb12912b6b85dd6578e499b00c86fb.webp)
+![treegen-pinegen logo](https://cdn.nostrcheck.me/46025249f65d47dddb0f17d93eb8b0a32d97fe3189c6684bbd33136a0a7e0424/ee9d2b2b47e1bb1656f784e78fcf0db54449afc8b3ac8969c54ca9c3cbdf4afa.webp)
 
-Procedural Voxel Tree + Pine Tree Generator for MagicaVoxel
+Procedural Voxel Tree + Pine Tree + Birch Tree Generator for MagicaVoxel
 
 Generate customizable .vox trees using palettes, sliders, and pure Python.
 
-Built with Python, NumPy, and Pillow. The project now uses a PyQt6 GUI (`treegen_qt.py`) which calls the shared core in `treegen_core.py`.
+Built with Python, NumPy, and Pillow. The project uses a PyQt6 GUI (`treegen_qt.py`) which calls the shared core in worker modules.
 
 ## ✨ Features
 
-- Two generators
+- Three generators
   - Treegen — oak-style branching tree generator
   - Pinegen — pine/conifer generator with cone-shaped leaf clusters
+  - Birchgen — birch tree generator with slender trunks and spreading crowns
 - GUI
-  - PyQt6 UI: `treegen_qt.py` (menu, About dialog, inline status)
-- Real-time preview (low-res projection) with progress and cancellation
+  - PyQt6 UI: `treegen_qt.py` (menu, About dialog, inline status, tabbed interface)
+- Real-time preview with multiprocessing (heavy generation in subprocesses for speed)
 - Export to MagicaVoxel `.vox` via `VoxExporter`
-- Custom palettes: use 256-color PNG palettes placed in `palettes/tree/` and `palettes/pine/`
+- Custom palettes: use 256-color PNG palettes placed in `palettes/tree/`, `palettes/pine/`, `palettes/birch/`
 - Randomize presets and deterministic generation via seed
-- Organized output folders: `output/tree/` and `output/pine/`
+- Organized output folders: `output/tree/`, `output/pine/`, `output/birch/`
 - "Open file after generation" option (platform-aware)
 - Non-modal export status displayed above each preview in the PyQt UI
+- Unique filenames using timestamps to avoid overwrites
 
 ## Controls (implemented in the PyQt UI)
 
@@ -51,17 +52,33 @@ Pinegen sliders/controls and ranges:
 - `Leaf Bias`: -1.0 — 1.0
 - `Seed`: 1 — 9999
 
+Birchgen sliders/controls and ranges:
+- `Size`: 0.1 — 3.0
+- `Trunk Size`: 0.05 — 0.8
+- `Spread`: 0.1 — 0.8
+- `Twist` (twisted): 0.0 — 1.0
+- `Leafiness`: 0.0 — 3.0
+- `Gravity`: -1.0 — 1.0
+- `Wide`: 0.05 — 0.2
+- `Iterations`: 5 — 14 (integer)
+- `Seed`: 1 — 9999
+
 Other UI features (PyQt6 port)
 - Menu bar: File → Close, Help → About (About shows app/version/credits)
-- Inline status: export results appear above the preview (`tree_dim_label`/`pine_dim_label`)
-- Preview uses `treegen_core.generate_*_preview` and runs in a worker QThread with progress signals and cooperative cancellation
-- Export runs in a separate process (ProcessPoolExecutor) and writes `.vox` files using `VoxExporter` (counter files: `treegen_counter.txt`, `pinegen_counter.txt`)
+- Inline status: export results appear above the preview (`tree_dim_label`/`pine_dim_label`/`birch_dim_label`)
+- Preview uses worker modules and runs in a worker QThread with progress signals and cooperative cancellation
+- Export runs in a separate process (ProcessPoolExecutor) and writes `.vox` files using `VoxExporter`
+- Tabbed interface for easy switching between generators
+- Previews update on startup, tab changes, and palette selections
 
 ## Code layout
 - `treegen_qt.py` — PyQt6 GUI (primary frontend)
-- `treegen_core.py` — shared generation logic, preview builders, and `VoxExporter`
-- `palettes/` — palette PNGs for tree and pine
-- `output/tree/`, `output/pine/` — generated .vox files
+- `treegen_worker.py` — Treegen generation logic and VoxExporter
+- `pinegen_worker.py` — Pinegen generation logic and VoxExporter
+- `birch_worker.py` — Birchgen generation logic and VoxExporter
+- `palette_worker.py` — Palette management utilities
+- `palettes/` — palette PNGs for tree, pine, and birch
+- `output/tree/`, `output/pine/`, `output/birch/` — generated .vox files
 
 ## Requirements
 
@@ -85,20 +102,21 @@ PyQt6 UI (primary):
 python treegen_qt.py
 ```
 
-The PyQt UI calls into the shared core. Use the preview to iterate before exporting `.vox` files.
+The PyQt UI calls into the worker modules. Use the preview to iterate before exporting `.vox` files.
 
 ## Palettes
 
 Each palette is expected to be a 256-entry PNG (one-row palette). Place palettes in:
 - `palettes/tree/`
 - `palettes/pine/`
+- `palettes/birch/`
 
-Palette mapping for leaves/trunk colors is defined in the core (see `TREE_PALETTE_MAP` and `PINE_PALETTE_MAP` in `treegen_core.py`).
+Palette mapping for leaves/trunk colors is defined in the worker modules (see `TREE_PALETTE_MAP`, `PINE_PALETTE_MAP`, etc.).
 
 ## Export & Output
 
-- Exports produce `.vox` files compatible with MagicaVoxel and are saved to `output/tree/` or `output/pine/`.
-- The exporter maintains a simple counter file (`treegen_counter.txt` / `pinegen_counter.txt`) to avoid overwriting files.
+- Exports produce `.vox` files compatible with MagicaVoxel and are saved to `output/tree/`, `output/pine/`, or `output/birch/`.
+- Filenames use timestamps (e.g., `treegen_20231005_143022.vox`) to ensure uniqueness without external counter files.
 
 ## Credits
 
