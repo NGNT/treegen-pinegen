@@ -1,6 +1,7 @@
 # 🌲 treegen-pinegen
 
-![treegen-pinegen logo](https://cdn.nostrcheck.me/46025249f65d47dddb0f17d93eb8b0a32d97fe3189c6684bbd33136a0a7e0424/ee9d2b2b47e1bb1656f784e78fcf0db54449afc8b3ac8969c54ca9c3cbdf4afa.webp)
+![treegen-pinegen logo](https://cdn.nostrcheck.me/46025249f65d47dddb0f17d93eb8b0a32d97fe3189c6684bbd33136a0a7e0424/43c1c30713b958352f4cbb2e60b45a0b94b95e67e3d449c91d0c4674b83446d7.webp)
+![treegen-pinegen logo](https://cdn.nostrcheck.me/46025249f65d47dddb0f17d93eb8b0a32d97fe3189c6684bbd33136a0a7e0424/152943f64e82f95415814b8a3f0ea7a216fb12912b6b85dd6578e499b00c86fb.webp)
 
 Procedural Voxel Tree + Pine Tree Generator for MagicaVoxel
 
