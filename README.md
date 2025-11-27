@@ -106,15 +106,6 @@ python treegen_qt.py
 
 The PyQt UI calls into the worker modules. Use the preview to iterate before exporting `.vox` files.
 
-## Palettes
-
-Each palette is expected to be a 256-entry PNG (one-row palette). Place palettes in:
-- `palettes/tree/`
-- `palettes/pine/`
-- `palettes/birch/`
-
-Palette mapping for leaves/trunk colors is defined in the worker modules (see `TREE_PALETTE_MAP`, `PINE_PALETTE_MAP`, etc.).
-
 ## Export & Output
 
 - Exports produce `.vox` files compatible with MagicaVoxel and are saved to `output/tree/`, `output/pine/`, or `output/birch/`.
