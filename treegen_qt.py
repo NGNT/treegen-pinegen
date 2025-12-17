@@ -30,6 +30,13 @@ from treegen_worker import generate_treegen_preview, generate_treegen_tree, expo
 from pinegen_worker import generate_pinegen_preview, generate_pinegen_tree, export_pine
 from birch_worker import generate_birchgen_preview, generate_birchgen_tree, export_birch
 
+# Attempt to import palm worker
+try:
+    from palm_worker import generate_palm_preview, generate_palm_tree, export_palm
+    PALM_AVAILABLE = True
+except Exception:
+    PALM_AVAILABLE = False
+
 # Use internal palette manager for UI lists (avoid relying on PNG files)
 try:
     import palette_worker
@@ -119,6 +126,8 @@ class PreviewThread(QThread):
                 future = self.executor.submit(generate_pinegen_tree, self.params, self.palette_name, grid_size=256, preview=False)
             elif self.mode == 'birch':
                 future = self.executor.submit(generate_birchgen_tree, self.params, self.palette_name, grid_size=256, preview=False)
+            elif self.mode == 'palm':
+                future = self.executor.submit(generate_palm_tree, self.params, self.palette_name, grid_size=256, preview=False)
             else:
                 raise ValueError(f"Unknown mode: {self.mode}")
 
@@ -133,6 +142,9 @@ class PreviewThread(QThread):
             voxels, palette = future.result()
 
             # Project in main process
+            if self.mode == 'palm':
+                # Swap Y/Z for palm preview to match correct orientation
+                voxels = np.swapaxes(voxels, 1, 2)
             img_full = project_voxels_to_image(voxels, palette, 256, view='front')
             img = img_full.resize((192, 192), Image.NEAREST)  # 64*3=192
 
@@ -183,10 +195,12 @@ class TreegenQtMain(QWidget):
         self.tree_tab = QWidget()
         self.pine_tab = QWidget()
         self.birch_tab = QWidget()
+        self.palm_tab = QWidget()
 
         self.tabs.addTab(self.tree_tab, "Treegen")
         self.tabs.addTab(self.pine_tab, "Pinegen")
         self.tabs.addTab(self.birch_tab, "Birchgen")
+        self.tabs.addTab(self.palm_tab, "Palmgen")
 
         # timers for debouncing preview updates
         self.tree_preview_timer = QTimer(self)
@@ -200,6 +214,10 @@ class TreegenQtMain(QWidget):
         self.birch_preview_timer = QTimer(self)
         self.birch_preview_timer.setSingleShot(True)
         self.birch_preview_timer.timeout.connect(self._start_birch_preview)
+
+        self.palm_preview_timer = QTimer(self)
+        self.palm_preview_timer.setSingleShot(True)
+        self.palm_preview_timer.timeout.connect(self._start_palm_preview)
 
         # keep reference to running thread to avoid GC
         # track active preview threads (there can be overlapping ones)
@@ -222,6 +240,7 @@ class TreegenQtMain(QWidget):
         self.build_tree_tab()
         self.build_pine_tab()
         self.build_birch_tab()
+        self.build_palm_tab()
 
         # Connect tab change to trigger preview
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -230,6 +249,7 @@ class TreegenQtMain(QWidget):
         self.tree_preview_timer.start(100)
         self.pine_preview_timer.start(100)
         self.birch_preview_timer.start(100)
+        self.palm_preview_timer.start(100)
 
     def _map_slider_to_range(self, val, amin, amax, bmin, bmax):
         """Map value `val` in [amin, amax] to range [bmin, bmax].
@@ -331,7 +351,7 @@ class TreegenQtMain(QWidget):
         slider.setValue(max(0, min(1000, t)))
         parent_layout.addWidget(slider)
         return slider, (amin, amax)
-
+    
     def build_tree_tab(self):
         tab = self.tree_tab
         main_layout = QVBoxLayout(tab)
@@ -441,7 +461,6 @@ class TreegenQtMain(QWidget):
             slider.setStyleSheet(tree_slider_style)
 
         # Iterations (5..15) integer
-        controls_layout.addWidget(QLabel("Iterations"))
         iterations_label = QLabel("Iterations")
         iterations_label.setStyleSheet("color: #ecf0f1; font-weight: 500;")
         controls_layout.addWidget(iterations_label)
@@ -456,22 +475,10 @@ class TreegenQtMain(QWidget):
             """
         )
         controls_layout.addWidget(self.tree_iterations_spin)
-        # Seed (1..9999)
-        controls_layout.addWidget(QLabel("Seed"))
-        seed_label = QLabel("Seed")
-        seed_label.setStyleSheet("color: #ecf0f1; font-weight: 500;")
-        controls_layout.addWidget(seed_label)
-        self.tree_seed_spin = QSpinBox()
-        self.tree_seed_spin.setRange(1, 9999)
-        self.tree_seed_spin.setValue(1)
-        self.tree_seed_spin.setStyleSheet(
-            """
-            QSpinBox { background: #233a1f; color: #eaf6e9; border: 1px solid #3a5a2b; border-radius: 4px; padding: 2px; }
-            QSpinBox::up-button, QSpinBox::down-button { background: #3a5a2b; border: none; width: 12px; }
-            QSpinBox::up-arrow, QSpinBox::down-arrow { width: 6px; height: 6px; }
-            """
-        )
-        controls_layout.addWidget(self.tree_seed_spin)
+        # Seed as slider (1..9999)
+        self.tree_seed_slider, self.tree_seed_range = self._create_float_slider(controls_layout, "Seed", 1, 9999, 1)
+        # apply the same tree slider style used earlier
+        self.tree_seed_slider.setStyleSheet(tree_slider_style)
 
         # Generate button and progress bar (buttons moved to preview column)
         # keep placeholders for attribute creation later in preview section
@@ -562,7 +569,7 @@ class TreegenQtMain(QWidget):
         controls = [
             self.tree_size_slider, self.tree_trunk_slider, self.tree_spread_slider, self.tree_twist_slider,
             self.tree_leaves_slider, self.tree_gravity_slider, self.tree_wide_slider,
-            self.tree_iterations_spin, self.tree_seed_spin, self.tree_palette_combo
+            self.tree_iterations_spin, self.tree_seed_slider, self.tree_palette_combo
         ]
         for c in controls:
             if isinstance(c, QSlider):
@@ -683,22 +690,10 @@ class TreegenQtMain(QWidget):
         for slider in [self.pine_size_slider, self.pine_twist_slider, self.pine_trunk_slider, self.pine_trunkheight_slider, self.pine_branchdensity_slider, self.pine_branchlength_slider, self.pine_branchdir_slider, self.pine_leaves_slider, self.pine_leaf_radius_slider, self.pine_leaf_stretch_slider, self.pine_leaf_bias_slider]:
             slider.setStyleSheet(pine_slider_style)
 
-        # Seed
-        controls_layout.addWidget(QLabel("Seed"))
-        seed_label = QLabel("Seed")
-        seed_label.setStyleSheet("color: #ecf0f1; font-weight: 500;")
-        controls_layout.addWidget(seed_label)
-        self.pine_seed_spin = QSpinBox()
-        self.pine_seed_spin.setRange(1, 9999)
-        self.pine_seed_spin.setValue(1)
-        self.pine_seed_spin.setStyleSheet(
-            """
-            QSpinBox { background: #0f3024; color: #e7f6ef; border: 1px solid #254c33; border-radius: 4px; padding: 2px; }
-            QSpinBox::up-button, QSpinBox::down-button { background: #254c33; border: none; width: 12px; }
-            QSpinBox::up-arrow, QSpinBox::down-arrow { width: 6px; height: 6px; }
-            """
-        )
-        controls_layout.addWidget(self.pine_seed_spin)
+        # Seed (slider 1..9999)
+        self.pine_seed_slider, self.pine_seed_range = self._create_float_slider(controls_layout, "Seed", 1, 9999, 1)
+        # apply same pine slider style
+        self.pine_seed_slider.setStyleSheet(pine_slider_style)
 
         # Generate button and progress bar (buttons moved to preview column)
         # placeholders will be created in preview section
@@ -788,7 +783,7 @@ class TreegenQtMain(QWidget):
             self.pine_size_slider, self.pine_twist_slider, self.pine_trunk_slider, self.pine_trunkheight_slider,
             self.pine_branchdensity_slider, self.pine_branchlength_slider, self.pine_branchdir_slider,
             self.pine_leaves_slider, self.pine_leaf_radius_slider, self.pine_leaf_stretch_slider, self.pine_leaf_bias_slider,
-            self.pine_seed_spin, self.pine_palette_combo
+            self.pine_seed_slider, self.pine_palette_combo
         ]
         for c in controls:
             if isinstance(c, QSlider):
@@ -910,21 +905,10 @@ class TreegenQtMain(QWidget):
         )
         controls_layout.addWidget(self.birch_iterations_spin)
 
-        controls_layout.addWidget(QLabel("Seed"))
-        seed_label = QLabel("Seed")
-        seed_label.setStyleSheet("color: #8B4513; font-weight: 500;")
-        controls_layout.addWidget(seed_label)
-        self.birch_seed_spin = QSpinBox()
-        self.birch_seed_spin.setRange(1, 9999)
-        self.birch_seed_spin.setValue(1)
-        self.birch_seed_spin.setStyleSheet(
-            """
-            QSpinBox { background: #F5DEB3; color: #8B4513; border: 1px solid #A0522D; border-radius: 4px; padding: 2px; }
-            QSpinBox::up-button, QSpinBox::down-button { background: #A0522D; border: none; width: 12px; }
-            QSpinBox::up-arrow, QSpinBox::down-arrow { width: 6px; height: 6px; }
-            """
-        )
-        controls_layout.addWidget(self.birch_seed_spin)
+        # Seed (slider 1..9999)
+        self.birch_seed_slider, self.birch_seed_range = self._create_float_slider(controls_layout, "Seed", 1, 9999, 1)
+        # apply birch slider style already defined above
+        self.birch_seed_slider.setStyleSheet(birch_slider_style)
 
         self.birch_progress = QProgressBar()
         self.birch_progress.setVisible(False)
@@ -1011,7 +995,7 @@ class TreegenQtMain(QWidget):
         controls = [
             self.birch_size_slider, self.birch_trunk_slider, self.birch_spread_slider, self.birch_twist_slider,
             self.birch_leaves_slider, self.birch_gravity_slider, self.birch_wide_slider,
-            self.birch_iterations_spin, self.birch_seed_spin, self.birch_palette_combo
+            self.birch_iterations_spin, self.birch_seed_slider, self.birch_palette_combo
         ]
         for c in controls:
             if isinstance(c, QSlider):
@@ -1041,7 +1025,7 @@ class TreegenQtMain(QWidget):
             'gravity': s2r(self.tree_gravity_slider, self.tree_gravity_range),
             'iterations': self.tree_iterations_spin.value(),
             'wide': s2r(self.tree_wide_slider, self.tree_wide_range),
-            'seed': self.tree_seed_spin.value()
+            'seed': int(s2r(self.tree_seed_slider, self.tree_seed_range))
         }
         palette = self.tree_palette_combo.currentText() if self.tree_palette_combo.count() > 0 else ''
         # update estimated dimensions right away (estimator functions removed)
@@ -1089,7 +1073,7 @@ class TreegenQtMain(QWidget):
             'leaf_radius': s2r(self.pine_leaf_radius_slider, self.pine_leaf_radius_range),
             'leaf_stretch': s2r(self.pine_leaf_stretch_slider, self.pine_leaf_stretch_range),
             'leaf_bias': s2r(self.pine_leaf_bias_slider, self.pine_leaf_bias_range),
-            'seed': self.pine_seed_spin.value()
+            'seed': int(s2r(self.pine_seed_slider, self.pine_seed_range))
         }
         palette = self.pine_palette_combo.currentText() if self.pine_palette_combo.count() > 0 else ''
         # estimator removed; clear pine dim label
@@ -1130,7 +1114,7 @@ class TreegenQtMain(QWidget):
             'gravity': s2r(self.birch_gravity_slider, self.birch_gravity_range),
             'iterations': self.birch_iterations_spin.value(),
             'wide': s2r(self.birch_wide_slider, self.birch_wide_range),
-            'seed': self.birch_seed_spin.value()
+            'seed': int(s2r(self.birch_seed_slider, self.birch_seed_range))
         }
         palette = self.birch_palette_combo.currentText() if self.birch_palette_combo.count() > 0 else ''
         try:
@@ -1152,6 +1136,241 @@ class TreegenQtMain(QWidget):
         thr.error.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
         self.birch_preview_progress.setRange(0, 0)
         self.birch_preview_progress.setVisible(True)
+        thr.start()
+    
+    def build_palm_tab(self):
+        tab = self.palm_tab
+        main_layout = QVBoxLayout(tab)
+        header = self._make_header(tab, "Palmgen by NGNT", ("img/palm_image.png", "img/palmgen_text.png"), tint_color='#c27c2a')
+        try:
+            header.setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2e2b19, stop:1 #1b1208); border-bottom: 2px solid #b06a1f;")
+        except Exception:
+            pass
+        main_layout.addWidget(header)
+
+        content_layout = QHBoxLayout()
+        main_layout.addLayout(content_layout)
+
+        controls_panel = QFrame()
+        controls_panel.setStyleSheet("background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #2b2412, stop:1 #1a1207); border: 1px solid #5a3e21; border-radius: 6px;")
+        controls_panel_layout = QVBoxLayout(controls_panel)
+        controls_panel_layout.setContentsMargins(12,12,12,12)
+        controls_panel_layout.setSpacing(8)
+
+        panel_title = QLabel("Palm Settings")
+        panel_title.setStyleSheet("font-weight: 600; color: #e9d8c1;")
+        controls_panel_layout.addWidget(panel_title)
+
+        controls_layout = QVBoxLayout()
+        controls_frame_widget = QWidget()
+        controls_frame_widget.setLayout(controls_layout)
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setWidget(controls_frame_widget)
+        controls_scroll.setStyleSheet("border: none; background: transparent;")
+        controls_panel_layout.addWidget(controls_scroll)
+
+        # Palette combo
+        self.palm_palette_combo = QComboBox()
+        try:
+            if palette_worker is not None and hasattr(palette_worker, '_palette_manager'):
+                all_files = palette_worker._palette_manager.list_palettes()
+                palm_palettes = [p for p in all_files if 'palm' in p.lower() or 'tropical' in p.lower()]
+            else:
+                palm_palette_dir = resource_path(os.path.join("palettes","palm"))
+                palm_palettes = [f for f in os.listdir(palm_palette_dir) if f.endswith('.png')]
+        except Exception:
+            palm_palettes = []
+        if palm_palettes:
+            self.palm_palette_combo.addItems(palm_palettes)
+        controls_layout.addWidget(QLabel("Palette"))
+        controls_layout.addWidget(self.palm_palette_combo)
+        # Make the combo's popup opaque/readable and match palm theme
+        try:
+            self.palm_palette_combo.setView(QListView())
+            self.palm_palette_combo.setStyleSheet(
+                """
+                QComboBox { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #c27c2a, stop:1 #b06a1f); color: #ffffff; border: 1px solid #6b4523; border-radius: 4px; padding: 4px; }
+                QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: top right; width: 20px; border-left: 1px solid #6b4523; }
+                QComboBox QAbstractItemView { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #c27c2a, stop:1 #b06a1f); color: #ffffff; selection-background-color: #f0c57a; selection-color: #1b1208; border: 1px solid #6b4523; }
+                """
+            )
+        except Exception:
+            pass
+
+        # Palm sliders matching voxcscript parameters
+        self.palm_size_slider, self.palm_size_range = self._create_float_slider(controls_layout, "Size", 0.1, 2.0, 1.0)
+        self.palm_trunkextend_slider, self.palm_trunkextend_range = self._create_float_slider(controls_layout, "Trunk Height", 0.0, 340.0, 80.0)
+        self.palm_trunksize_slider, self.palm_trunksize_range = self._create_float_slider(controls_layout, "Trunk Width", 0.3, 4.0, 1.0)
+        self.palm_trunkiter_slider, self.palm_trunkiter_range = self._create_float_slider(controls_layout, "Trunk Iter", 12, 80, 40)
+        self.palm_bend_slider, self.palm_bend_range = self._create_float_slider(controls_layout, "Bend", 0.0, 1.0, 1.0)
+        self.palm_leafcount_slider, self.palm_leafcount_range = self._create_float_slider(controls_layout, "Frond Count", 4, 72, 33)
+        # Add value display for leaf count
+        self.palm_leafcount_value = QLabel(f"{int(self._map_slider_to_range(self.palm_leafcount_slider.value(), 0, 1000, 4, 72))}")
+        self.palm_leafcount_value.setStyleSheet("color: #e9d8c1; font-weight: 500;")
+        controls_layout.addWidget(self.palm_leafcount_value)
+        self.palm_leafcount_slider.valueChanged.connect(lambda: self.palm_leafcount_value.setText(f"{int(self._map_slider_to_range(self.palm_leafcount_slider.value(), 0, 1000, 4, 72))}"))
+        self.palm_leaflength_slider, self.palm_leaflength_range = self._create_float_slider(controls_layout, "Frond Length", 0.1, 3.0, 0.35)
+        self.palm_leafvar_slider, self.palm_leafvar_range = self._create_float_slider(controls_layout, "Frond Var", 0.0, 1.0, 0.5)
+        self.palm_frondrandom_slider, self.palm_frondrandom_range = self._create_float_slider(controls_layout, "Frond Random", 0.0, 1.0, 1.0)
+        self.palm_gravity_slider, self.palm_gravity_range = self._create_float_slider(controls_layout, "Gravity", 0.0, 1.0, 0.3)
+        self.palm_leafwidth_slider, self.palm_leafwidth_range = self._create_float_slider(controls_layout, "Frond Width", 0.1, 1.0, 0.25)
+        # Palm-themed slider style (matches palm button colors)
+        palm_slider_style = """
+        QSlider { background: transparent; }
+        QSlider::groove:horizontal { height: 8px; background: #5a3e21; border-radius: 4px; }
+        QSlider::handle:horizontal {
+            background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #c27c2a, stop:1 #b06a1f);
+            border: 1px solid #8a5a32;
+            width: 18px; margin: -5px 0; border-radius: 9px;
+        }
+        QSlider::handle:horizontal:hover {
+            background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #d29439, stop:1 #c07a2a);
+        }
+        """
+        # Apply style to all palm sliders
+        for slider in [
+            self.palm_size_slider, self.palm_trunkextend_slider, self.palm_trunksize_slider,
+            self.palm_trunkiter_slider, self.palm_bend_slider, self.palm_leafcount_slider,
+            self.palm_leaflength_slider, self.palm_leafvar_slider, self.palm_frondrandom_slider,
+            self.palm_gravity_slider, self.palm_leafwidth_slider
+        ]:
+            slider.setStyleSheet(palm_slider_style)
+
+        # Seed (slider 1..9999)
+        self.palm_seed_slider, self.palm_seed_range = self._create_float_slider(controls_layout, "Seed", 1, 9999, 1)
+        # apply palm slider style already defined above
+        self.palm_seed_slider.setStyleSheet(palm_slider_style)
+
+        self.palm_progress = QProgressBar()
+        self.palm_progress.setVisible(False)
+        controls_layout.addWidget(self.palm_progress)
+        self.palm_preview_progress = QProgressBar()
+        self.palm_preview_progress.setVisible(False)
+        self.palm_preview_progress.setRange(0,100)
+        controls_layout.addWidget(self.palm_preview_progress)
+
+        controls_layout.addStretch(1)
+        content_layout.addWidget(controls_panel, 1)
+
+        # Preview column
+        preview_layout = QVBoxLayout()
+        preview_frame_widget = QWidget()
+        preview_frame_widget.setLayout(preview_layout)
+
+        btn_container = QFrame()
+        btn_container.setStyleSheet("background: #2b2012; border: 1px solid #4a3220; border-radius: 6px;")
+        btn_container_layout = QVBoxLayout(btn_container)
+        btn_container_layout.setContentsMargins(8,6,8,6)
+        btn_container_layout.setSpacing(6)
+        # Palm-themed button style (warm orange/brown gradient)
+        _palm_btn_style = (
+            "QPushButton { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #c27c2a, stop:1 #b06a1f);"
+            " color: white; padding: 6px 12px; border: none; border-radius: 4px; font-weight: 600; }"
+            "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #d29439, stop:1 #c07a2a); }"
+            "QPushButton:disabled { background: #8a5a32; color: #e6d3b8; }"
+        )
+
+        # create buttons and apply style
+        top_row = QHBoxLayout()
+        top_row.addStretch(1)
+        self.palm_randomize_btn = QPushButton("Randomize")
+        self.palm_randomize_btn.setStyleSheet(_palm_btn_style)
+        self.palm_randomize_btn.clicked.connect(self._randomize_palm_sliders)
+        top_row.addWidget(self.palm_randomize_btn)
+
+        self.palm_generate_btn = QPushButton("Generate Palm")
+        self.palm_generate_btn.setStyleSheet(_palm_btn_style)
+        self.palm_generate_btn.clicked.connect(self._on_palm_generate)
+        top_row.addWidget(self.palm_generate_btn)
+        top_row.addStretch(1)
+        btn_container_layout.addLayout(top_row)
+        chk_row = QHBoxLayout()
+        chk_row.addStretch(1)
+        self.palm_open_after = QCheckBox("Open file after generation")
+        self.palm_open_after.setChecked(True)
+        self.palm_open_after.setStyleSheet(
+            """
+            QCheckBox { color: #e9d8c1; spacing: 6px; }
+            QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; border: 1px solid #6b4523; background: #1b1208; }
+            QCheckBox::indicator:unchecked { background: #1b1208; }
+            QCheckBox::indicator:checked { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #f0c57a, stop:1 #d79a3c); border: 1px solid #b06a1f; }
+            """
+        )
+        chk_row.addWidget(self.palm_open_after)
+        chk_row.addStretch(1)
+        btn_container_layout.addLayout(chk_row)
+        preview_layout.addWidget(btn_container)
+
+        preview_layout.addStretch(1)
+        self.palm_preview = QLabel()
+        self.palm_preview.setFixedSize(320,320)
+        self.palm_preview.setStyleSheet("background: #0f0b05; border: 1px solid #5a3e21;")
+        self.palm_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.palm_dim_label = QLabel("")
+        self.palm_dim_label.setStyleSheet("color: #e9d8c1; font-weight: 500;")
+        self.palm_dim_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview_layout.addWidget(self.palm_dim_label)
+        preview_layout.addWidget(self.palm_preview, 0, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+        preview_layout.addStretch(1)
+        content_layout.addWidget(preview_frame_widget)
+
+        self.palm_preview.setText("")
+
+        # Connect controls -> preview timer
+        controls = [
+            self.palm_size_slider, self.palm_trunkextend_slider, self.palm_trunksize_slider, self.palm_trunkiter_slider,
+            self.palm_bend_slider, self.palm_leafcount_slider, self.palm_leaflength_slider, self.palm_leafvar_slider,
+            self.palm_frondrandom_slider, self.palm_gravity_slider, self.palm_leafwidth_slider, self.palm_seed_slider, self.palm_palette_combo
+        ]
+        for c in controls:
+            if isinstance(c, QSlider):
+                c.valueChanged.connect(lambda _: self.palm_preview_timer.start(300))
+            elif isinstance(c, QSpinBox):
+                c.valueChanged.connect(lambda _: self.palm_preview_timer.start(300))
+            elif isinstance(c, QComboBox):
+                c.currentIndexChanged.connect(lambda _: self.palm_preview_timer.start(300))
+
+        # start initial preview
+        self.palm_preview_timer.start(100)
+
+    def _start_palm_preview(self):
+        if not PALM_AVAILABLE:
+            return
+        def s2r(slider, r):
+            v = slider.value()
+            amin, amax = r
+            return amin + (amax - amin) * (v / 1000.0)
+        params = {
+            'size': s2r(self.palm_size_slider, self.palm_size_range),
+            'trunkextend': s2r(self.palm_trunkextend_slider, self.palm_trunkextend_range),
+            'trunksize': s2r(self.palm_trunksize_slider, self.palm_trunksize_range),
+            'trunkiter': int(s2r(self.palm_trunkiter_slider, self.palm_trunkiter_range)),
+            'bend': s2r(self.palm_bend_slider, self.palm_bend_range),
+            'leafcount': int(s2r(self.palm_leafcount_slider, self.palm_leafcount_range)),
+            'leaflength': s2r(self.palm_leaflength_slider, self.palm_leaflength_range),
+            'leafvar': s2r(self.palm_leafvar_slider, self.palm_leafvar_range),
+            'frondrandom': s2r(self.palm_frondrandom_slider, self.palm_frondrandom_range),
+            'gravity': s2r(self.palm_gravity_slider, self.palm_gravity_range),
+            'leafwidth': s2r(self.palm_leafwidth_slider, self.palm_leafwidth_range),
+            'seed': int(s2r(self.palm_seed_slider, self.palm_seed_range))
+        }
+        palette = self.palm_palette_combo.currentText() if self.palm_palette_combo.count() > 0 else ''
+        if self._preview_thread is not None and self._preview_thread.isRunning():
+            try:
+                self._preview_thread.cancel()
+            except Exception:
+                pass
+        thr = PreviewThread('palm', params, palette, self._export_executor, parent=self)
+        self._register_preview_thread(thr)
+        self._preview_thread = thr
+        thr.progress.connect(self._on_palm_preview_progress)
+        thr.finished.connect(self._on_preview_ready)
+        thr.error.connect(self._on_preview_error)
+        thr.finished.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
+        thr.error.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
+        self.palm_preview_progress.setRange(0,0)
+        self.palm_preview_progress.setVisible(True)
         thr.start()
 
     def _start_preview_thread(self, mode, params, palette_name):
@@ -1179,6 +1398,12 @@ class TreegenQtMain(QWidget):
         except Exception:
             pass
 
+    def _on_palm_preview_progress(self, p):
+        try:
+            self.palm_preview_progress.setValue(int(p * 100))
+        except Exception:
+            pass
+
     def _on_preview_ready(self, pil_image, mode):
         # Convert PIL Image to QPixmap and set on corresponding preview label
         try:
@@ -1193,6 +1418,9 @@ class TreegenQtMain(QWidget):
             elif mode == 'birch':
                 self.birch_preview.setPixmap(pix.scaled(self.birch_preview.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
                 self.birch_preview_progress.setVisible(False)
+            elif mode == 'palm':
+                self.palm_preview.setPixmap(pix.scaled(self.palm_preview.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.palm_preview_progress.setVisible(False)
         except Exception as e:
             print('Error converting preview image:', e)
 
@@ -1213,6 +1441,10 @@ class TreegenQtMain(QWidget):
                     self.birch_preview_progress.setVisible(False)
                 except Exception:
                     pass
+                try:
+                    self.palm_preview_progress.setVisible(False)
+                except Exception:
+                    pass
                 return
             print('Preview generation error:', msg)
             try:
@@ -1227,9 +1459,9 @@ class TreegenQtMain(QWidget):
         try:
             about_text = (
                 "Voxel Tree Generator Studio (PyQt6)\n"
-                "Version 1.5.1\n\n"
+                "Version 1.5.2\n\n"
                 "Made by NGNT Creations\n"
-                "Preview and export voxel trees and pines.\n"
+                "Preview and export voxel trees using the treegen-pinegen library.\n"
                 "https://github.com/NGNT/treegen-pinegen"
             )
             QMessageBox.about(self, 'About', about_text)
@@ -1244,7 +1476,7 @@ class TreegenQtMain(QWidget):
         # disable or enable top-level tab contents (excluding preview QLabel)
         for child in tab_widget.findChildren(QWidget):
             # keep preview labels enabled so user sees the image
-            if isinstance(child, QLabel) and (child is getattr(self, 'tree_preview', None) or child is getattr(self, 'pine_preview', None) or child is getattr(self, 'birch_preview', None)):
+            if isinstance(child, QLabel) and (child is getattr(self, 'tree_preview', None) or child is getattr(self, 'pine_preview', None) or child is getattr(self, 'birch_preview', None) or child is getattr(self, 'palm_preview', None)):
                 continue
             try:
                 child.setDisabled(disable)
@@ -1298,7 +1530,7 @@ class TreegenQtMain(QWidget):
             'leaf_radius': 2.0,
             'leaf_stretch': 1.5,
             'leaf_bias': -0.3,
-            'seed': self.tree_seed_spin.value(),
+            'seed': int(self._map_slider_to_range(self.tree_seed_slider.value(), 0, 1000, 1, 9999)),
             'iterations': self.tree_iterations_spin.value(),
             'spread': self._map_slider_to_range(self.tree_spread_slider.value(), 0, 1000, 0.0, 1.0),
             'gravity': self._map_slider_to_range(self.tree_gravity_slider.value(), 0, 1000, -1.0, 1.0),
@@ -1331,7 +1563,7 @@ class TreegenQtMain(QWidget):
             'leaf_radius': self._map_slider_to_range(self.pine_leaf_radius_slider.value(), 0, 1000, 1.0, 4.0),
             'leaf_stretch': self._map_slider_to_range(self.pine_leaf_stretch_slider.value(), 0, 1000, 0.5, 3.0),
             'leaf_bias': self._map_slider_to_range(self.pine_leaf_bias_slider.value(), 0, 1000, -1.0, 1.0),
-            'seed': self.pine_seed_spin.value()
+            'seed': int(self._map_slider_to_range(self.pine_seed_slider.value(), 0, 1000, 1, 9999))
         }
         palette = self.pine_palette_combo.currentText() if self.pine_palette_combo.count() > 0 else ''
         self.pine_progress.setVisible(True)
@@ -1357,7 +1589,7 @@ class TreegenQtMain(QWidget):
             'leaf_radius': 2.0,
             'leaf_stretch': 1.5,
             'leaf_bias': -0.3,
-            'seed': self.birch_seed_spin.value(),
+            'seed': int(self._map_slider_to_range(self.birch_seed_slider.value(), 0, 1000, 1, 9999)),
             'iterations': self.birch_iterations_spin.value(),
             'spread': self._map_slider_to_range(self.birch_spread_slider.value(), 0, 1000, 0.0, 1.0),
             'gravity': self._map_slider_to_range(self.birch_gravity_slider.value(), 0, 1000, -1.0, 1.0),
@@ -1369,6 +1601,30 @@ class TreegenQtMain(QWidget):
         self._disable_tab_controls(self.birch_tab, True)
         future = self._export_executor.submit(export_birch, params, palette)
         future.add_done_callback(lambda f, m='birch': self._handle_export_future(f, m))
+    def _on_palm_generate(self):
+        if not PALM_AVAILABLE:
+            QMessageBox.critical(self, 'Error', 'Palm core not available')
+            return
+        params = {
+            'size': self._map_slider_to_range(self.palm_size_slider.value(), 0, 1000, 0.1, 3.0),
+            'trunkextend': self._map_slider_to_range(self.palm_trunkextend_slider.value(), 0, 1000, 0.0, 340.0),
+            'trunksize': self._map_slider_to_range(self.palm_trunksize_slider.value(), 0, 1000, 0.3, 4.0),
+            'trunkiter': int(self._map_slider_to_range(self.palm_trunkiter_slider.value(), 0, 1000, 12, 80)),
+            'bend': self._map_slider_to_range(self.palm_bend_slider.value(), 0, 1000, 0.0, 1.0),
+            'leafcount': int(self._map_slider_to_range(self.palm_leafcount_slider.value(), 0, 1000, 4, 72)),
+            'leaflength': self._map_slider_to_range(self.palm_leaflength_slider.value(), 0, 1000, 0.1, 3.0),
+            'leafvar': self._map_slider_to_range(self.palm_leafvar_slider.value(), 0, 1000, 0.0, 1.0),
+            'frondrandom': self._map_slider_to_range(self.palm_frondrandom_slider.value(), 0, 1000, 0.0, 1.0),
+            'gravity': self._map_slider_to_range(self.palm_gravity_slider.value(), 0, 1000, 0.0, 1.0),
+            'leafwidth': self._map_slider_to_range(self.palm_leafwidth_slider.value(), 0, 1000, 0.1, 1.0),
+            'seed': int(self._map_slider_to_range(self.palm_seed_slider.value(), 0, 1000, 1, 9999)),
+        }
+        palette = self.palm_palette_combo.currentText() if self.palm_palette_combo.count() > 0 else ''
+        self.palm_progress.setVisible(True)
+        self.palm_progress.setRange(0,0)
+        self._disable_tab_controls(self.palm_tab, True)
+        future = self._export_executor.submit(export_palm, params, palette)
+        future.add_done_callback(lambda f, m='palm': self._handle_export_future(f, m))
     def _handle_export_future(self, future, mode):
         try:
             filename = future.result()
@@ -1442,6 +1698,27 @@ class TreegenQtMain(QWidget):
                         subprocess.call(["xdg-open", filename])
                 except Exception:
                     pass
+        elif mode == 'palm':
+            self.palm_progress.setVisible(False)
+            self._disable_tab_controls(self.palm_tab, False)
+            self.palm_generate_btn.setEnabled(True)
+            try:
+                display = self._format_output_path(filename)
+                self.palm_dim_label.setText(f'Generated: {display}')
+            except Exception:
+                pass
+            if self.palm_open_after.isChecked():
+                try:
+                    if sys.platform.startswith('win'):
+                        os.startfile(filename)
+                    elif sys.platform == 'darwin':
+                        import subprocess
+                        subprocess.call(["open", filename])
+                    else:
+                        import subprocess
+                        subprocess.call(["xdg-open", filename])
+                except Exception:
+                    pass
 
     def _on_export_failed(self, mode, error_msg):
         if mode == 'tree':
@@ -1456,6 +1733,10 @@ class TreegenQtMain(QWidget):
             self.birch_progress.setVisible(False)
             self._disable_tab_controls(self.birch_tab, False)
             self.birch_generate_btn.setEnabled(True)
+        elif mode == 'palm':
+            self.palm_progress.setVisible(False)
+            self._disable_tab_controls(self.palm_tab, False)
+            self.palm_generate_btn.setEnabled(True)
         QMessageBox.critical(self, 'Export Failed', f'Export failed with error:\n{error_msg}')
 
     def cleanup(self):
@@ -1562,8 +1843,8 @@ class TreegenQtMain(QWidget):
         set_slider_from_range(self.tree_wide_slider, self.tree_wide_range)
         # iterations spinbox
         self.tree_iterations_spin.setValue(random.randint(self.tree_iterations_spin.minimum(), self.tree_iterations_spin.maximum()))
-        # seed
-        self.tree_seed_spin.setValue(random.randint(self.tree_seed_spin.minimum(), self.tree_seed_spin.maximum()))
+        # seed (slider)
+        set_slider_from_range(self.tree_seed_slider, self.tree_seed_range)
         # palette is not randomized here; set manually in UI
         # trigger preview
         self.tree_preview_timer.start(50)
@@ -1587,7 +1868,7 @@ class TreegenQtMain(QWidget):
         set_slider_from_range(self.pine_leaf_stretch_slider, self.pine_leaf_stretch_range)
         set_slider_from_range(self.pine_leaf_bias_slider, self.pine_leaf_bias_range)
         # seed
-        self.pine_seed_spin.setValue(random.randint(self.pine_seed_spin.minimum(), self.pine_seed_spin.maximum()))
+        set_slider_from_range(self.pine_seed_slider, self.pine_seed_range)
         # palette is not randomized here; set manually in UI
         # trigger preview
         self.pine_preview_timer.start(50)
@@ -1607,8 +1888,28 @@ class TreegenQtMain(QWidget):
         set_slider_from_range(self.birch_gravity_slider, self.birch_gravity_range)
         set_slider_from_range(self.birch_wide_slider, self.birch_wide_range)
         self.birch_iterations_spin.setValue(random.randint(self.birch_iterations_spin.minimum(), self.birch_iterations_spin.maximum()))
-        self.birch_seed_spin.setValue(random.randint(self.birch_seed_spin.minimum(), self.birch_seed_spin.maximum()))
+        set_slider_from_range(self.birch_seed_slider, self.birch_seed_range)
         self.birch_preview_timer.start(50)
+    
+    def _randomize_palm_sliders(self):
+        def set_slider_from_range(slider, r):
+            amin, amax = r
+            v = random.uniform(amin, amax)
+            t = int(round((v - amin) / (amax - amin) * 1000)) if amax != amin else 0
+            slider.setValue(max(0, min(1000, t)))
+        set_slider_from_range(self.palm_size_slider, self.palm_size_range)
+        set_slider_from_range(self.palm_trunkextend_slider, self.palm_trunkextend_range)
+        set_slider_from_range(self.palm_trunksize_slider, self.palm_trunksize_range)
+        set_slider_from_range(self.palm_trunkiter_slider, self.palm_trunkiter_range)
+        set_slider_from_range(self.palm_bend_slider, self.palm_bend_range)
+        set_slider_from_range(self.palm_leafcount_slider, self.palm_leafcount_range)
+        set_slider_from_range(self.palm_leaflength_slider, self.palm_leaflength_range)
+        set_slider_from_range(self.palm_leafvar_slider, self.palm_leafvar_range)
+        set_slider_from_range(self.palm_frondrandom_slider, self.palm_frondrandom_range)
+        set_slider_from_range(self.palm_gravity_slider, self.palm_gravity_range)
+        set_slider_from_range(self.palm_leafwidth_slider, self.palm_leafwidth_range)
+        set_slider_from_range(self.palm_seed_slider, self.palm_seed_range)
+        self.palm_preview_timer.start(50)
 
     def _on_tab_changed(self, index):
         # Stop all previews when switching tabs
@@ -1616,6 +1917,7 @@ class TreegenQtMain(QWidget):
             self.tree_preview_timer.stop()
             self.pine_preview_timer.stop()
             self.birch_preview_timer.stop()
+            self.palm_preview_timer.stop()
         except Exception:
             pass
 
@@ -1627,6 +1929,8 @@ class TreegenQtMain(QWidget):
                 self.pine_preview_timer.start(100)
             elif index == 2:  # Birchgen tab
                 self.birch_preview_timer.start(100)
+            elif index == 3:  # Palmgen tab
+                self.palm_preview_timer.start(100)
         except Exception:
             pass
 

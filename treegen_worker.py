@@ -302,22 +302,13 @@ def generate_treegen_tree(params, palette_name, grid_size=GRID, preview=False, p
     return voxels, palette
 
 def generate_treegen_preview(params, palette_name, grid_size=PREVIEW_GRID, view='front', progress_callback=None, cancel_check=None):
-    """Produce a preview image that matches exported output.
-
-    To avoid differences between low-res preview generation and full exports,
-    generate the tree at full GRID resolution and downscale to the UI preview
-    size. If that fails (memory constrained environments), fall back to the
-    previous faster reduced-grid generation path.
-    """
     try:
-        # Generate full-resolution voxels so preview matches export exactly
         vox, palette = generate_treegen_tree(params, palette_name, grid_size=GRID, preview=False, progress_callback=progress_callback, cancel_check=cancel_check)
         img_full = project_voxels_to_image(vox, palette, GRID, view=view)
         return img_full.resize((grid_size * 3, grid_size * 3), Image.NEAREST)
     except CancelledError:
         raise
     except Exception:
-        # Fallback: previous behavior (faster, lower-res generation)
         shrink = grid_size / GRID
         params_preview = params.copy()
         params_preview['size'] *= shrink
@@ -327,29 +318,16 @@ def generate_treegen_preview(params, palette_name, grid_size=PREVIEW_GRID, view=
         return img.resize((grid_size*3, grid_size*3), Image.NEAREST)
 
 def orient_voxels_for_export(voxels, view='front'):
-    """Return a reoriented copy of `voxels` so that MagicaVoxel's front view
-    displays the same face as the UI preview using `view` semantics.
-
-    For 'front' preview we use the voxel array as-is (no rotation) so the
-    exported model appears upright in MagicaVoxel's front view. For 'top',
-    perform an X<->Z swap so MagicaVoxel front shows the top. Other views
-    are returned unchanged.
-    """
     try:
         if view == 'front':
-            # Keep coordinates unchanged: preview 'front' projects X (horizontal) vs Z (vertical),
-            # and MagicaVoxel front view will display X horizontal / Z vertical when using the same axes.
             return voxels
         elif view == 'top':
-            # Rotate so that original Z becomes Y (so MagicaVoxel front shows top-down)
-            # swap x<->z then optionally flip vertical axis to match preview orientation if needed
-            oriented = np.swapaxes(voxels, 0, 2).copy()  # x<->z
+            oriented = np.swapaxes(voxels, 0, 2).copy()
             return oriented
         else:
             return voxels
     except Exception:
         return voxels
-
 
 def export_tree(params, palette_name, prefix='treegen', export_view='front'):
     voxels, palette = generate_treegen_tree(params, palette_name, grid_size=GRID, preview=True)

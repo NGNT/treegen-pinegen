@@ -1091,6 +1091,217 @@ class InternalPaletteManager:
         self.register_palette('Birch Variant 2', birch2, map_config={'leaves': list(range(9, 16)), 'trunk': list(range(57, 66))})
 
 
+        # Palm default: tropical palm greens and browns, row-aligned for MagicaVoxel
+        palm_default = [(8, 8, 8, 255)] * 256
+
+        # Row 2: indices 9-16 (leaves) - palm frond green gradient
+        leaf_grad = [
+            (0x58, 0x76, 0x33, 255),  # index 9: 587633
+            (0x55, 0x74, 0x33, 255),  # index 10: 557433
+            (0x52, 0x72, 0x33, 255),  # index 11: 527233
+            (0x4f, 0x70, 0x33, 255),  # index 12: 4f7033
+            (0x4b, 0x6f, 0x32, 255),  # index 13: 4b6f32
+            (0x48, 0x6d, 0x32, 255),  # index 14: 486d32
+            (0x45, 0x6b, 0x32, 255),  # index 15: 456b32
+            (0x42, 0x69, 0x32, 255),  # index 16: 426932
+        ]
+        palm_default[9:17] = leaf_grad
+
+        # Row 8: indices 57-64 (trunk) - palm trunk brown gradient
+        trunk_grad = [
+            (0x94, 0x86, 0x71, 255),  # index 57: 948671
+            (0x8b, 0x7c, 0x68, 255),  # index 58: 8b7c68
+            (0x83, 0x71, 0x5f, 255),  # index 59: 83715f
+            (0x7a, 0x68, 0x56, 255),  # index 60: 7a6856
+            (0x74, 0x62, 0x50, 255),  # index 61: 746250
+            (0x6d, 0x5b, 0x49, 255),  # index 62: 6d5b49
+            (0x67, 0x53, 0x43, 255),  # index 63: 675343
+            (0x60, 0x4e, 0x3d, 255),  # index 64: 604e3d
+        ]
+        palm_default[57:65] = trunk_grad
+
+        # Fill other rows with tropical gradients
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row == 2 or row == 8:
+                continue
+            for i in range(start, end):
+                if i >= 256:
+                    break
+                t = (i - 1) / 255
+                palm_default[i] = (
+                    int(60 + 80 * t),
+                    int(100 + 60 * t),
+                    int(30 + 50 * t),
+                    255
+                )
+
+        self.register_palette('Palm Default', palm_default, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+# Palm Lush: deeper, saturated tropical greens with darker trunk
+        palm_lush = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0x2E, 0x7A, 0x2A, 255),  # index 9
+            (0x31, 0x78, 0x2D, 255),  # index 10
+            (0x35, 0x76, 0x30, 255),  # index 11
+            (0x39, 0x74, 0x33, 255),  # index 12
+            (0x3D, 0x71, 0x36, 255),  # index 13
+            (0x41, 0x6F, 0x39, 255),  # index 14
+            (0x46, 0x6D, 0x3D, 255),  # index 15
+            (0x4B, 0x6B, 0x41, 255),  # index 16
+        ]
+        palm_lush[9:17] = leaf_grad
+        trunk_grad = [
+            (0x5A, 0x48, 0x36, 255),
+            (0x54, 0x44, 0x33, 255),
+            (0x4F, 0x40, 0x30, 255),
+            (0x4A, 0x3C, 0x2E, 255),
+            (0x45, 0x37, 0x2B, 255),
+            (0x40, 0x33, 0x29, 255),
+            (0x3B, 0x2F, 0x27, 255),
+            (0x36, 0x2B, 0x25, 255),
+        ]
+        palm_lush[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8):
+                continue
+            for i in range(start, end):
+                if i >= 256:
+                    break
+                t = (i - 1) / 255
+                palm_lush[i] = (
+                    int(30 + 90 * t),
+                    int(80 + 90 * t),
+                    int(20 + 40 * t),
+                    255
+                )
+        self.register_palette('Palm Lush', palm_lush, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+        # Palm Dusk: cool bluish fronds that read well in low light, slightly muted trunk
+        palm_dusk = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0x2A, 0x66, 0x46, 255),
+            (0x28, 0x62, 0x44, 255),
+            (0x26, 0x5E, 0x42, 255),
+            (0x24, 0x5A, 0x40, 255),
+            (0x22, 0x56, 0x3E, 255),
+            (0x20, 0x52, 0x3C, 255),
+            (0x1E, 0x4E, 0x3A, 255),
+            (0x1C, 0x4A, 0x38, 255),
+        ]
+        palm_dusk[9:17] = leaf_grad
+        trunk_grad = [
+            (0x6A, 0x55, 0x4A, 255),
+            (0x63, 0x4F, 0x45, 255),
+            (0x5C, 0x49, 0x40, 255),
+            (0x55, 0x43, 0x3B, 255),
+            (0x4E, 0x3E, 0x36, 255),
+            (0x47, 0x38, 0x31, 255),
+            (0x40, 0x33, 0x2C, 255),
+            (0x39, 0x2E, 0x27, 255),
+        ]
+        palm_dusk[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8):
+                continue
+            for i in range(start, end):
+                if i >= 256:
+                    break
+                t = (i - 1) / 255
+                palm_dusk[i] = (
+                    int(30 + 50 * t),
+                    int(60 + 40 * t),
+                    int(30 + 50 * t),
+                    255
+                )
+        self.register_palette('Palm Dusk', palm_dusk, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+        # Palm Sandbar: pale yellow-greens and sandy trunk for beachy palms
+        palm_sandbar = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0x7A, 0x7A, 0x34, 255),
+            (0x78, 0x78, 0x33, 255),
+            (0x76, 0x76, 0x32, 255),
+            (0x74, 0x74, 0x31, 255),
+            (0x72, 0x72, 0x30, 255),
+            (0x70, 0x70, 0x2F, 255),
+            (0x6E, 0x6E, 0x2E, 255),
+            (0x6C, 0x6C, 0x2D, 255),
+        ]
+        palm_sandbar[9:17] = leaf_grad
+        trunk_grad = [
+            (0xA8, 0x94, 0x7A, 255),
+            (0xA2, 0x8F, 0x76, 255),
+            (0x9C, 0x8A, 0x72, 255),
+            (0x96, 0x85, 0x6E, 255),
+            (0x90, 0x80, 0x6A, 255),
+            (0x8A, 0x7B, 0x66, 255),
+            (0x84, 0x76, 0x62, 255),
+            (0x7E, 0x71, 0x5E, 255),
+        ]
+        palm_sandbar[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8):
+                continue
+            for i in range(start, end):
+                if i >= 256:
+                    break
+                t = (i - 1) / 255
+                palm_sandbar[i] = (
+                    int(80 + 60 * t),
+                    int(90 + 60 * t),
+                    int(20 + 30 * t),
+                    255
+                )
+        self.register_palette('Palm Sandbar', palm_sandbar, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+        # Palm Sunset: warm orange-tinged fronds and richer trunk for evening scenes
+        palm_sunset = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0x6A, 0x62, 0x2C, 255),
+            (0x68, 0x5E, 0x2A, 255),
+            (0x66, 0x5A, 0x28, 255),
+            (0x64, 0x56, 0x26, 255),
+            (0x62, 0x52, 0x24, 255),
+            (0x60, 0x4E, 0x22, 255),
+            (0x5E, 0x4A, 0x20, 255),
+            (0x5C, 0x46, 0x1E, 255),
+        ]
+        palm_sunset[9:17] = leaf_grad
+        trunk_grad = [
+            (0x8F, 0x5A, 0x3E, 255),
+            (0x88, 0x55, 0x39, 255),
+            (0x81, 0x50, 0x34, 255),
+            (0x7A, 0x4B, 0x2F, 255),
+            (0x73, 0x46, 0x2A, 255),
+            (0x6C, 0x41, 0x25, 255),
+            (0x65, 0x3C, 0x20, 255),
+            (0x5E, 0x37, 0x1B, 255),
+        ]
+        palm_sunset[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8):
+                continue
+            for i in range(start, end):
+                if i >= 256:
+                    break
+                t = (i - 1) / 255
+                palm_sunset[i] = (
+                    int(50 + 120 * t),
+                    int(40 + 80 * t),
+                    int(15 + 40 * t),
+                    255
+                )
+        self.register_palette('Palm Sunset', palm_sunset, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
 
 # Singleton convenience instance used by the application
 _palette_manager = InternalPaletteManager()

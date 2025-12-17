@@ -4,7 +4,7 @@
 ![treegen-pinegen logo](https://cdn.nostrcheck.me/46025249f65d47dddb0f17d93eb8b0a32d97fe3189c6684bbd33136a0a7e0424/a91d292209d98d746086ca5f509f33e92c97f6f6f74db41e28c4d85150a91497.webp)
 ![treegen-pinegen logo](https://cdn.nostrcheck.me/46025249f65d47dddb0f17d93eb8b0a32d97fe3189c6684bbd33136a0a7e0424/52b43ad80f51100004c6dfd41ef822382ea07403b27efbd0f165a2db4156875c.webp)
 
-Procedural Voxel Tree + Pine Tree + Birch Tree Generator for MagicaVoxel
+Procedural Voxel Tree Generator for MagicaVoxel
 
 Generate customizable .vox trees using palettes, sliders, and pure Python.
 
@@ -16,16 +16,31 @@ Built with Python, NumPy, and Pillow. The project uses a PyQt6 GUI (`treegen_qt.
   - Treegen — oak-style branching tree generator
   - Pinegen — pine/conifer generator with cone-shaped leaf clusters
   - Birchgen — birch tree generator with slender trunks and spreading crowns
+  - Palmgen — tropical palm generator (new)
 - GUI
   - PyQt6 UI: `treegen_qt.py` (menu, About dialog, inline status, tabbed interface)
 - Real-time preview with multiprocessing (heavy generation in subprocesses for speed)
 - Export to MagicaVoxel `.vox` via `VoxExporter`
-- Custom palettes: use 256-color PNG palettes placed in `palettes/tree/`, `palettes/pine/`, `palettes/birch/`
+- Custom palettes: use 256-color PNG palettes placed in `palettes/tree/`, `palettes/pine/`, `palettes/birch/` (internal palm palettes added)
 - Randomize presets and deterministic generation via seed
-- Organized output folders: `output/tree/`, `output/pine/`, `output/birch/`
+- Organized output folders: `output/tree/`, `output/pine/`, `output/birch/`, `output/palm/`
 - "Open file after generation" option (platform-aware)
 - Non-modal export status displayed above each preview in the PyQt UI
 - Unique filenames using timestamps to avoid overwrites
+
+## Recent additions
+- Palmgen UI polish
+  - Palm palette combo popup now uses the themed styling consistent with other tabs (Tree/Pine/Birch).
+  - Palm seed control was changed from a spinbox to the themed slider used across the app; the slider value is wired to preview, export and randomize.
+- New internal palm palettes (programmatically registered)
+  - `Palm Default` (existing)
+  - `Palm Lush` — deep saturated tropical greens with darker trunk
+  - `Palm Dusk` — cool bluish fronds for low-light scenes
+  - `Palm Sandbar` — pale yellow-greens and sandy trunk for beachy palms
+  - `Palm Sunset` — warm orange-tinged fronds with rich trunk tones
+  These are provided via `palette_worker.py` so no external PNG files are required to use them.
+- Frond colour mapping
+  - Leaf voxels are now mapped to palette indices based on their fractional position along each frond (t01) so frond mid-lengths read darker and tips read lighter. This produces a natural dark band down the centre of fronds and a smooth outward-lightening gradient.
 
 ## Controls (implemented in the PyQt UI)
 
@@ -65,9 +80,23 @@ Birchgen sliders/controls and ranges:
 - `Iterations`: 5 — 14 (integer)
 - `Seed`: 1 — 9999
 
+Palmgen sliders/controls and ranges (new):
+- `Size`: 0.1 — 3.0
+- `Trunk Height`: 0.0 — 340.0
+- `Trunk Width`: 0.3 — 4.0
+- `Trunk Iter`: 12 — 80 (integer)
+- `Bend`: 0.0 — 1.0
+- `Frond Count`: 4 — 72
+- `Frond Length`: 0.1 — 3.0
+- `Frond Var`: 0.0 — 1.0
+- `Frond Random`: 0.0 — 1.0
+- `Gravity`: 0.0 — 1.0
+- `Frond Width`: 0.1 — 1.0
+- `Seed`: 1 — 9999
+
 Other UI features (PyQt6 port)
 - Menu bar: File → Close, Help → About (About shows app/version/credits)
-- Inline status: export results appear above the preview (`tree_dim_label`/`pine_dim_label`/`birch_dim_label`)
+- Inline status: export results appear above the preview (`tree_dim_label`/`pine_dim_label`/`birch_dim_label`/`palm_dim_label`)
 - Preview uses worker modules and runs in a worker QThread with progress signals and cooperative cancellation
 - Export runs in a separate process (ProcessPoolExecutor) and writes `.vox` files using `VoxExporter`
 - Tabbed interface for easy switching between generators
@@ -78,9 +107,10 @@ Other UI features (PyQt6 port)
 - `treegen_worker.py` — Treegen generation logic and VoxExporter
 - `pinegen_worker.py` — Pinegen generation logic and VoxExporter
 - `birch_worker.py` — Birchgen generation logic and VoxExporter
-- `palette_worker.py` — Palette management utilities
-- `palettes/` — palette PNGs for tree, pine, and birch
-- `output/tree/`, `output/pine/`, `output/birch/` — generated .vox files
+- `palm_worker.py` — Palm generator and export logic (new)
+- `palette_worker.py` — Palette management utilities (internal palm palettes added)
+- `palettes/` — palette PNGs for tree, pine, and birch (optional when internal palettes are used)
+- `output/tree/`, `output/pine/`, `output/birch/`, `output/palm/` — generated .vox files
 
 ## Requirements
 
@@ -106,9 +136,18 @@ python treegen_qt.py
 
 The PyQt UI calls into the worker modules. Use the preview to iterate before exporting `.vox` files.
 
+## Palettes
+
+Each palette is expected to be a 256-entry PNG (one-row palette). Place palettes in:
+- `palettes/tree/`
+- `palettes/pine/`
+- `palettes/birch/`
+
+Palm palettes are also provided programmatically inside `palette_worker.py` and do not require external PNG files. Use the Palm-themed palettes via the Palm tab combo.
+
 ## Export & Output
 
-- Exports produce `.vox` files compatible with MagicaVoxel and are saved to `output/tree/`, `output/pine/`, or `output/birch/`.
+- Exports produce `.vox` files compatible with MagicaVoxel and are saved to `output/tree/`, `output/pine/`, `output/birch/`, or `output/palm/`.
 - Filenames use timestamps (e.g., `treegen_20231005_143022.vox`) to ensure uniqueness without external counter files.
 
 ## Credits
