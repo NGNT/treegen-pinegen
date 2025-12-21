@@ -1,4 +1,3 @@
-# (full file content with local-RNG changes)
 import os
 import random
 from datetime import datetime
@@ -34,41 +33,34 @@ def resource_path(filename):
 def clamp(v, mi, ma):
     return max(mi, min(ma, v))
 
-def load_palette_png(filename):
-    # try opening palette relative to project resources
-    path = resource_path(filename)
-    try:
-        image = PILImage.open(path).convert("RGBA")
-        pixels = list(image.getdata())
-        if len(pixels) >= 256:
-            return pixels[:256]
-        return pixels + [(0, 0, 0, 0)] * (256 - len(pixels))
-    except Exception:
-        # fallback grayscale palette
-        return [(i, i, i, 255) for i in range(256)]
-
 class VoxExporter:
-    def __init__(self, params, palette_map=None, palette_subdir='tree', output_subdir='tree', counter_file='treegen_counter.txt'):
+    def __init__(self, params, palette_map=None, palette_subdir='tree', output_subdir='tree'):
+        """
+        Simplified VoxExporter: no counter file, time-based filenames only.
+        Backwards-compatible with callers that pass (params, palette_map, palette_subdir, output_subdir).
+        """
         self.params = params
-        self.palette_map = palette_map or {'default': {'leaves':[9,17],'trunk':[57,65]}}
+        self.palette_map = palette_map or {'default': {'leaves': [9, 17], 'trunk': [57, 65]}}
         self.palette_subdir = palette_subdir
         self.output_subdir = output_subdir
-        self.counter_file = counter_file
 
     def load_palette(self, palette_name):
+        """
+        Prefer the internal palette registry if available. Do not attempt to load palette files from disk.
+        Returns (palette_list, leaf_indices, trunk_indices).
+        """
         key = os.path.basename(palette_name) if palette_name else 'default'
-        # Prefer internal palette registry if available and contains the requested key
         try:
             if get_internal_palette and _palette_manager and key in _palette_manager.list_palettes():
                 palette, mapping = get_internal_palette(key)
                 return palette, mapping.get('leaves', [9, 17]), mapping.get('trunk', [57, 65])
         except Exception:
-            # fallthrough to file-based loading
+            # fallthrough to default palette
             pass
 
-        path = resource_path(os.path.join('palettes', self.palette_subdir, key))
-        palette = load_palette_png(path) if palette_name else [(i, i, i, 255) for i in range(256)]
-        config = self.palette_map.get(key, next(iter(self.palette_map.values())))
+        # Fallback: simple grayscale palette and mapping from provided palette_map
+        palette = [(i, i, i, 255) for i in range(256)]
+        config = self.palette_map.get(key, next(iter(self.palette_map.values()))) if self.palette_map else {'leaves': [9,17], 'trunk': [57,65]}
         return palette, config.get('leaves', [9, 17]), config.get('trunk', [57, 65])
 
     def export(self, voxels, palette, leaf_indices, trunk_indices, prefix='treegen', preview=False):
@@ -108,6 +100,7 @@ class VoxExporter:
             mask = np.ones_like(voxels, dtype=bool)
             mask[min_xyz[0]:max_xyz[0]+1, min_xyz[1]:max_xyz[1]+1, min_xyz[2]:max_xyz[2]+1] = False
             voxels[mask] = 0
+
         # --- Palette index fix for MagicaVoxel/Teardown ---
         # Shift palette left by 1 so palette[8] is index 9 in MagicaVoxel
         if len(palette) >= 256:
@@ -127,19 +120,7 @@ class VoxExporter:
         main_chunk = b'MAIN' + struct.pack('<ii', 0, len(main_content)) + main_content
         vox_file = b'VOX ' + struct.pack('<i', 150) + main_chunk
 
-        # counter handling
-        if os.path.exists(self.counter_file):
-            try:
-                with open(self.counter_file, 'r') as f:
-                    count = int(f.read().strip()) + 1
-            except Exception:
-                count = 1
-        else:
-            count = 1
-        with open(self.counter_file, 'w') as f:
-            f.write(str(count))
-
-        # Use timestamp for unique filename instead of counter file
+        # Use timestamp for unique filename (counter file removed)
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
         out_dir = os.path.join('output', self.output_subdir)
         os.makedirs(out_dir, exist_ok=True)
@@ -176,7 +157,7 @@ def generate_treegen_tree(params, palette_name, grid_size=GRID, preview=False, p
     seed = int(params.get('seed', 1))
     rng = random.Random(seed)
 
-    exporter = VoxExporter(params, TREE_PALETTE_MAP, 'tree', 'tree', 'treegen_counter.txt')
+    exporter = VoxExporter(params, TREE_PALETTE_MAP, 'tree', 'tree')
     palette, leaf_indices, trunk_indices = exporter.load_palette(palette_name) if palette_name else ([(i,i,i,255) for i in range(256)], [9,17], [57,65])
 
     voxels = np.zeros((grid_size, grid_size, grid_size), dtype=np.uint8)
@@ -333,7 +314,7 @@ def export_tree(params, palette_name, prefix='treegen', export_view='front'):
     voxels, palette = generate_treegen_tree(params, palette_name, grid_size=GRID, preview=True)
     # reorient voxels so exported file front matches preview front
     voxels_oriented = orient_voxels_for_export(voxels, view=export_view)
-    exporter = VoxExporter(params, TREE_PALETTE_MAP, 'tree', 'tree', 'treegen_counter.txt')
+    exporter = VoxExporter(params, TREE_PALETTE_MAP, 'tree', 'tree')
     loaded_palette, leaf_indices, trunk_indices = exporter.load_palette(palette_name) if palette_name else (palette, [9,17], [57,65])
     return exporter.export(voxels_oriented, loaded_palette, leaf_indices, trunk_indices, prefix, preview=False)
 

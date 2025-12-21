@@ -1303,6 +1303,400 @@ class InternalPaletteManager:
                 )
         self.register_palette('Palm Sunset', palm_sunset, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
 
+        # Kapok family: tropical broadleaf palettes (row-aligned for MagicaVoxel)
+        kapok_tropical = [(8, 8, 8, 255)] * 256
+        # Row 2: indices 9-16 (leaves) - vibrant mixed green/yellow canopy
+        leaf_grad = [
+            (0x3A, 0x7A, 0x34, 255),
+            (0x44, 0x84, 0x38, 255),
+            (0x4E, 0x8E, 0x3C, 255),
+            (0x58, 0x98, 0x40, 255),
+            (0x6A, 0xA8, 0x4A, 255),
+            (0x7C, 0xB8, 0x54, 255),
+            (0x8E, 0xC8, 0x5E, 255),
+            (0xA0, 0xD8, 0x68, 255),
+        ]
+        kapok_tropical[9:17] = leaf_grad
+        # Row 8: indices 57-64 (trunk) - warm, slightly mottled trunk
+        trunk_grad = [
+            (0x7A, 0x5A, 0x45, 255),
+            (0x76, 0x58, 0x43, 255),
+            (0x72, 0x56, 0x41, 255),
+            (0x6E, 0x54, 0x3F, 255),
+            (0x6A, 0x52, 0x3D, 255),
+            (0x66, 0x50, 0x3B, 255),
+            (0x62, 0x4E, 0x39, 255),
+            (0x5E, 0x4C, 0x37, 255),
+        ]
+        kapok_tropical[57:65] = trunk_grad
+        # Fill other rows with lush mid-greens for body of palette
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8):
+                continue
+            for i in range(start, end):
+                if i >= 256: break
+                t = (i - 1) / 255
+                kapok_tropical[i] = (
+                    int(30 + 120 * t),
+                    int(60 + 130 * t) % 256,
+                    int(20 + 80 * t),
+                    255
+                )
+        self.register_palette('Kapok Tropical', kapok_tropical, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+        # Kapok Lush: denser, deeper greens + bright upper canopy highlights
+        kapok_lush = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0x26, 0x62, 0x2A, 255),
+            (0x2C, 0x6A, 0x2E, 255),
+            (0x32, 0x72, 0x32, 255),
+            (0x38, 0x7A, 0x36, 255),
+            (0x44, 0x86, 0x3E, 255),
+            (0x50, 0x92, 0x46, 255),
+            (0x5C, 0x9E, 0x4E, 255),
+            (0x68, 0xAA, 0x56, 255),
+        ]
+        kapok_lush[9:17] = leaf_grad
+        trunk_grad = [
+            (0x6E, 0x58, 0x45, 255),
+            (0x6A, 0x56, 0x43, 255),
+            (0x66, 0x54, 0x41, 255),
+            (0x62, 0x52, 0x3F, 255),
+            (0x5E, 0x50, 0x3D, 255),
+            (0x5A, 0x4E, 0x3B, 255),
+            (0x56, 0x4C, 0x39, 255),
+            (0x52, 0x4A, 0x37, 255),
+        ]
+        kapok_lush[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8): continue
+            for i in range(start, end):
+                if i >= 256: break
+                t = (i - 1) / 255
+                kapok_lush[i] = (
+                    int(20 + 80 * t),
+                    int(40 + 120 * t) % 256,
+                    int(10 + 50 * t),
+                    255
+                )
+        self.register_palette('Kapok Lush', kapok_lush, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+        # Kapok Dusk: warm highlights, yellow/orange top canopy and darker trunk for sunset scenes
+        kapok_dusk = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0x7A, 0x8A, 0x2A, 255),
+            (0x85, 0x92, 0x2E, 255),
+            (0x90, 0x9A, 0x32, 255),
+            (0x9B, 0xA2, 0x36, 255),
+            (0xB0, 0x8C, 0x2A, 255),
+            (0xC6, 0x72, 0x22, 255),
+            (0xE0, 0x58, 0x18, 255),
+            (0xF4, 0x3E, 0x0E, 255),
+        ]
+        kapok_dusk[9:17] = leaf_grad
+        trunk_grad = [
+            (0x82, 0x66, 0x4F, 255),
+            (0x7E, 0x64, 0x4D, 255),
+            (0x7A, 0x62, 0x4B, 255),
+            (0x76, 0x60, 0x49, 255),
+            (0x72, 0x5E, 0x47, 255),
+            (0x6E, 0x5C, 0x45, 255),
+            (0x6A, 0x5A, 0x43, 255),
+            (0x66, 0x58, 0x41, 255),
+        ]
+        kapok_dusk[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8): continue
+            for i in range(start, end):
+                if i >= 256: break
+                t = (i - 1) / 255
+                kapok_dusk[i] = (
+                    int(40 + 100 * t),
+                    int(30 + 60 * t),
+                    int(10 + 30 * t),
+                    255
+                )
+        self.register_palette('Kapok Dusk', kapok_dusk, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+        # Kapok Rainforest: Deep emerald greens for a dense, humid jungle feel, with subtle golden trunk flecks
+        kapok_rainforest = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0x1A, 0x4A, 0x1A, 255),  # Deep forest green
+            (0x20, 0x52, 0x20, 255),
+            (0x26, 0x5A, 0x26, 255),
+            (0x2C, 0x62, 0x2C, 255),
+            (0x32, 0x6A, 0x32, 255),
+            (0x38, 0x72, 0x38, 255),
+            (0x3E, 0x7A, 0x3E, 255),
+            (0x44, 0x82, 0x44, 255),  # Bright emerald top
+        ]
+        kapok_rainforest[9:17] = leaf_grad
+        trunk_grad = [
+            (0x5A, 0x4A, 0x3A, 255),  # Mottled brown with gold flecks
+            (0x60, 0x50, 0x40, 255),
+            (0x66, 0x56, 0x46, 255),
+            (0x6C, 0x5C, 0x4C, 255),
+            (0x72, 0x62, 0x52, 255),
+            (0x78, 0x68, 0x58, 255),
+            (0x7E, 0x6E, 0x5E, 255),
+            (0x84, 0x74, 0x64, 255),
+        ]
+        kapok_rainforest[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8): continue
+            for i in range(start, end):
+                if i >= 256: break
+                t = (i - 1) / 255
+                kapok_rainforest[i] = (
+                    int(20 + 100 * t),
+                    int(40 + 120 * t) % 256,
+                    int(15 + 60 * t),
+                    255
+                )
+        self.register_palette('Kapok Rainforest', kapok_rainforest, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+                # Kapok Exotic: Electric pinks and purples for an otherworldly, bioluminescent tropical paradise
+        kapok_exotic = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0xFF, 0x69, 0xB4, 255),  # Hot pink
+            (0xFF, 0x77, 0xC1, 255),
+            (0xFF, 0x85, 0xCE, 255),
+            (0xFF, 0x93, 0xDB, 255),
+            (0xDA, 0x70, 0xD6, 255),  # Orchid purple
+            (0xC7, 0x7D, 0xF0, 255),
+            (0xB4, 0x8A, 0xFF, 255),
+            (0xA1, 0x97, 0xFF, 255),
+        ]
+        kapok_exotic[9:17] = leaf_grad
+        trunk_grad = [
+            (0x8B, 0x45, 0x13, 255),  # Saddle brown with purple tint
+            (0x91, 0x4B, 0x1A, 255),
+            (0x97, 0x51, 0x21, 255),
+            (0x9D, 0x57, 0x28, 255),
+            (0xA3, 0x5D, 0x2F, 255),
+            (0xA9, 0x63, 0x36, 255),
+            (0xAF, 0x69, 0x3D, 255),
+            (0xB5, 0x6F, 0x44, 255),
+        ]
+        kapok_exotic[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8): continue
+            for i in range(start, end):
+                if i >= 256: break
+                t = (i - 1) / 255
+                kapok_exotic[i] = (
+                    int(200 + 55 * t) % 256,
+                    int(100 + 100 * t) % 256,
+                    int(150 + 100 * t) % 256,
+                    255
+                )
+        self.register_palette('Kapok Exotic', kapok_exotic, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+                # Kapok Neon: Glowing electric blues and cyans, like a cyber-tropical forest under neon lights
+        kapok_neon = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0x00, 0xFF, 0xFF, 255),  # Cyan
+            (0x1A, 0xFF, 0xFF, 255),
+            (0x33, 0xFF, 0xFF, 255),
+            (0x4D, 0xFF, 0xFF, 255),
+            (0x00, 0xBF, 0xFF, 255),  # Deep sky blue
+            (0x1A, 0xD1, 0xFF, 255),
+            (0x33, 0xE3, 0xFF, 255),
+            (0x4D, 0xF5, 0xFF, 255),
+        ]
+        kapok_neon[9:17] = leaf_grad
+        trunk_grad = [
+            (0x2F, 0x4F, 0x4F, 255),  # Dark slate gray with blue tint
+            (0x35, 0x55, 0x55, 255),
+            (0x3B, 0x5B, 0x5B, 255),
+            (0x41, 0x61, 0x61, 255),
+            (0x47, 0x67, 0x67, 255),
+            (0x4D, 0x6D, 0x6D, 255),
+            (0x53, 0x73, 0x73, 255),
+            (0x59, 0x79, 0x79, 255),
+        ]
+        kapok_neon[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8): continue
+            for i in range(start, end):
+                if i >= 256: break
+                t = (i - 1) / 255
+                kapok_neon[i] = (
+                    int(0 + 100 * t),
+                    int(100 + 155 * t) % 256,
+                    int(200 + 55 * t) % 256,
+                    255
+                )
+        self.register_palette('Kapok Neon', kapok_neon, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+                # Kapok Mystic: Mystical purples and golds, evoking an enchanted forest with glowing auras
+        kapok_mystic = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0x8A, 0x2B, 0xE2, 255),  # Blue violet
+            (0x93, 0x30, 0xE8, 255),
+            (0x9C, 0x35, 0xEE, 255),
+            (0xA5, 0x3A, 0xF4, 255),
+            (0xD4, 0xAF, 0x37, 255),  # Gold
+            (0xDA, 0xB5, 0x3D, 255),
+            (0xE0, 0xBB, 0x43, 255),
+            (0xE6, 0xC1, 0x49, 255),
+        ]
+        kapok_mystic[9:17] = leaf_grad
+        trunk_grad = [
+            (0x69, 0x69, 0x69, 255),  # Dim gray with purple undertones
+            (0x6F, 0x6F, 0x6F, 255),
+            (0x75, 0x75, 0x75, 255),
+            (0x7B, 0x7B, 0x7B, 255),
+            (0x81, 0x81, 0x81, 255),
+            (0x87, 0x87, 0x87, 255),
+            (0x8D, 0x8D, 0x8D, 255),
+            (0x93, 0x93, 0x93, 255),
+        ]
+        kapok_mystic[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8): continue
+            for i in range(start, end):
+                if i >= 256: break
+                t = (i - 1) / 255
+                kapok_mystic[i] = (
+                    int(100 + 100 * t) % 256,
+                    int(50 + 100 * t) % 256,
+                    int(150 + 100 * t) % 256,
+                    255
+                )
+        self.register_palette('Kapok Mystic', kapok_mystic, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+                # Kapok Aurora: Shimmering greens and blues like aurora borealis over a tropical tree
+        kapok_aurora = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0x00, 0xFF, 0x7F, 255),  # Spring green
+            (0x1A, 0xFF, 0x85, 255),
+            (0x33, 0xFF, 0x8B, 255),
+            (0x4D, 0xFF, 0x91, 255),
+            (0x00, 0x7F, 0xFF, 255),  # Azure
+            (0x1A, 0x8B, 0xFF, 255),
+            (0x33, 0x97, 0xFF, 255),
+            (0x4D, 0xA3, 0xFF, 255),
+        ]
+        kapok_aurora[9:17] = leaf_grad
+        trunk_grad = [
+            (0x4B, 0x4B, 0x4B, 255),  # Dark gray with blue-green tint
+            (0x51, 0x51, 0x51, 255),
+            (0x57, 0x57, 0x57, 255),
+            (0x5D, 0x5D, 0x5D, 255),
+            (0x63, 0x63, 0x63, 255),
+            (0x69, 0x69, 0x69, 255),
+            (0x6F, 0x6F, 0x6F, 255),
+            (0x75, 0x75, 0x75, 255),
+        ]
+        kapok_aurora[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8): continue
+            for i in range(start, end):
+                if i >= 256: break
+                t = (i - 1) / 255
+                kapok_aurora[i] = (
+                    int(0 + 100 * t),
+                    int(100 + 155 * t) % 256,
+                    int(50 + 150 * t) % 256,
+                    255
+                )
+        self.register_palette('Kapok Aurora', kapok_aurora, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+                # Kapok Inferno: Blazing reds and oranges, like a tree engulfed in volcanic flames
+        kapok_inferno = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0xFF, 0x45, 0x00, 255),  # Orange red
+            (0xFF, 0x4F, 0x0A, 255),
+            (0xFF, 0x59, 0x14, 255),
+            (0xFF, 0x63, 0x1E, 255),
+            (0xFF, 0x69, 0x28, 255),  # Red orange
+            (0xFF, 0x73, 0x32, 255),
+            (0xFF, 0x7D, 0x3C, 255),
+            (0xFF, 0x87, 0x46, 255),
+        ]
+        kapok_inferno[9:17] = leaf_grad
+        trunk_grad = [
+            (0x8B, 0x45, 0x13, 255),  # Saddle brown with red glow
+            (0x95, 0x4A, 0x16, 255),
+            (0x9F, 0x4F, 0x19, 255),
+            (0xA9, 0x54, 0x1C, 255),
+            (0xB3, 0x59, 0x1F, 255),
+            (0xBD, 0x5E, 0x22, 255),
+            (0xC7, 0x63, 0x25, 255),
+            (0xD1, 0x68, 0x28, 255),
+        ]
+        kapok_inferno[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8): continue
+            for i in range(start, end):
+                if i >= 256: break
+                t = (i - 1) / 255
+                kapok_inferno[i] = (
+                    int(200 + 55 * t) % 256,
+                    int(50 + 100 * t) % 256,
+                    int(0 + 50 * t),
+                    255
+                )
+        self.register_palette('Kapok Inferno', kapok_inferno, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
+                # Kapok Crystal: Icy blues and whites, like a tree encased in crystal ice in a tropical setting
+        kapok_crystal = [(8, 8, 8, 255)] * 256
+        leaf_grad = [
+            (0xE0, 0xF6, 0xFF, 255),  # Alice blue
+            (0xD6, 0xEC, 0xFF, 255),
+            (0xCC, 0xE2, 0xFF, 255),
+            (0xC2, 0xD8, 0xFF, 255),
+            (0xB8, 0xCE, 0xFF, 255),  # Light blue
+            (0xAE, 0xC4, 0xFF, 255),
+            (0xA4, 0xBA, 0xFF, 255),
+            (0x9A, 0xB0, 0xFF, 255),
+        ]
+        kapok_crystal[9:17] = leaf_grad
+        trunk_grad = [
+            (0xF5, 0xF5, 0xF5, 255),  # White smoke
+            (0xEB, 0xEB, 0xEB, 255),
+            (0xE1, 0xE1, 0xE1, 255),
+            (0xD7, 0xD7, 0xD7, 255),
+            (0xCD, 0xCD, 0xCD, 255),
+            (0xC3, 0xC3, 0xC3, 255),
+            (0xB9, 0xB9, 0xB9, 255),
+            (0xAF, 0xAF, 0xAF, 255),
+        ]
+        kapok_crystal[57:65] = trunk_grad
+        for row in range(1, 33):
+            start = (row - 1) * 8 + 1
+            end = start + 8
+            if row in (2, 8): continue
+            for i in range(start, end):
+                if i >= 256: break
+                t = (i - 1) / 255
+                kapok_crystal[i] = (
+                    int(200 + 55 * t) % 256,
+                    int(220 + 35 * t) % 256,
+                    int(240 + 15 * t) % 256,
+                    255
+                )
+        self.register_palette('Kapok Crystal', kapok_crystal, map_config={'leaves': [9, 16], 'trunk': [57, 64]})
+
 # Singleton convenience instance used by the application
 _palette_manager = InternalPaletteManager()
 

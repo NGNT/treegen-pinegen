@@ -1,7 +1,3 @@
-# Palm generator worker for treegen-pinegen
-# Ported and adapted from provided Teardown voxcscript logic to generate voxel volumes.
-# Exposes generate_palm_tree(params, palette_name, grid_size, preview) and generate_palm_preview and export_palm.
-
 import os
 import math
 import random
@@ -33,29 +29,17 @@ def resource_path(filename):
 def clamp(v, a, b):
     return max(a, min(b, v))
 
-# load palette png
-from PIL import Image as PILImage
-
-def load_palette_png(filename):
-    path = resource_path(filename)
-    try:
-        image = PILImage.open(path).convert("RGBA")
-        pixels = list(image.getdata())
-        if len(pixels) >= 256:
-            return pixels[:256]
-        return pixels + [(0,0,0,0)]*(256-len(pixels))
-    except Exception:
-        return [(i,i,i,255) for i in range(256)]
-
 # VoxExporter similar to other workers
 class VoxExporter:
-    def __init__(self, params, palette_subdir='palm', output_subdir='palm', counter_file='palm_counter.txt'):
+    def __init__(self, params, palette_map=None, palette_subdir='palm', output_subdir='palm'):
+        # Ensure both `palette_subdir` and `output_subdir` are stored; defaults to 'palm'
         self.params = params
+        self.palette_map = palette_map or {'default': {'leaves':[9,17],'trunk':[57,65]}}
         self.palette_subdir = palette_subdir
         self.output_subdir = output_subdir
-        self.counter_file = counter_file
 
     def load_palette(self, palette_name):
+        # Prefer internal palette registry; do not load palettes from external files.
         key = os.path.basename(palette_name) if palette_name else 'default'
         try:
             if get_internal_palette and _palette_manager and key in _palette_manager.list_palettes():
@@ -63,8 +47,8 @@ class VoxExporter:
                 return palette, mapping.get('leaves', [9,17]), mapping.get('trunk', [57,65])
         except Exception:
             pass
-        path = resource_path(os.path.join('palettes', self.palette_subdir, key))
-        palette = load_palette_png(path) if palette_name else [(i,i,i,255) for i in range(256)]
+        # Fallback: simple grayscale palette and default indices
+        palette = [(i, i, i, 255) for i in range(256)]
         return palette, [9,17], [57,65]
 
     def export(self, voxels, palette, leaf_indices, trunk_indices, prefix='palm', preview=False):
@@ -113,8 +97,7 @@ class VoxExporter:
             f.write(vox_file)
         return filename
 
-# ---------------- Palm generation (adapted) ----------------
-# We port the logic from the provided voxcscript, simplified to produce voxels.
+# ---------------- Palm generation ----------------
 
 # Utility vector funcs
 def normalize(v):
@@ -134,7 +117,7 @@ def dot(a, b):
     bx, by, bz = b
     return ax * bx + ay * by + az * bz
 
-# Small math helpers ported from Lua
+# Small math helpers
 def lerp(a, b, t):
     return a + (b - a) * max(0.0, min(1.0, t))
 
@@ -145,14 +128,13 @@ def sstep(a, b, x):
     return t * t * (3 - 2 * t)
 
 def hash01(a, b, c, d=0.0):
-    # deterministic pseudo-random based on trig similar to Lua implementation
     s = math.sin(a * 12.9898 + b * 78.233 + c * 37.719 + d * 11.13) * 43758.5453
     return s - math.floor(s)
 
 def gravityTerms(t, gGain, gPow):
     ramp = sstep(0.0, 0.60, t)
     k2 = gGain * (t ** gPow) * ramp
-    return k2, k2 * 0.65  # B_GRAV_GAIN approximated as 0.65 from Lua
+    return k2, k2 * 0.65
 
 def outwardBase(outScale):
     return 0.04 * outScale
@@ -200,8 +182,6 @@ def samplePhiForH(h, k, az):
     deg = phiMinDeg + span * uT
     return math.radians(deg)
 
-# From script: build trunk, canopy, fronds, dead fibres. We'll implement a simplified version that follows structure.
-
 class CancelledError(Exception):
     pass
 
@@ -218,7 +198,6 @@ def generate_palm_tree(params, palette_name, grid_size=GRID, preview=False, prog
     # read params with defaults and clamp
     pSize = clamp(params.get('size', 1.0), 0.1, 3.0)
     pTrunkExtend = clamp(params.get('trunkextend', 80.0), 0.0, 340.0)
-    # limit trunk width to a slimmer range for palms (max 2.0)
     pTrunkSize = clamp(params.get('trunksize', 1.0), 0.3, 2.0)
     pTrunkIter = int(clamp(params.get('trunkiter', 40), 12, 80))
     pBend = clamp(params.get('bend', 1.0), 0.0, 1.0)
@@ -231,7 +210,6 @@ def generate_palm_tree(params, palette_name, grid_size=GRID, preview=False, prog
     pHealth = clamp(params.get('health', 1.0), 0.0, 1.0)
     pLeafWobble = clamp(params.get('leafwobble', 0.00), 0.0, 1.0)
     pLeafletDip = clamp(params.get('leafletdip', 1.00), 0.0, 1.0)
-    # Frond-level randomness control (0 = none, 1 = full)
     pFrondRandom = clamp(params.get('frondrandom', 1.0), 0.0, 1.0)
     # Scale factor to amplify effect of the frond randomness slider (keeps slider 0..1)
     pFrondFactor = 1.0 + 2.0 * pFrondRandom  # at max, effects up to ~3x stronger
@@ -244,7 +222,6 @@ def generate_palm_tree(params, palette_name, grid_size=GRID, preview=False, prog
 
     CX, CY, CZ, CR = [0]*(pTrunkIter+2), [0]*(pTrunkIter+2), [0]*(pTrunkIter+2), [0]*(pTrunkIter+2)
 
-    # helpers to write lines (approximate) by sampling along segment and stamping radii
     trunk_voxels = set()
     # Map of leaf voxel coordinate -> best fractional position along frond (t01 0..1).
     # We store the t01 value that is closest to the frond center (0.5) so overlapping
@@ -338,12 +315,12 @@ def generate_palm_tree(params, palette_name, grid_size=GRID, preview=False, prog
     ux, vx, w = makeBasisFromAxis(dx,dy,dz)
     wx,wy,wz = w
 
-    # crown radius similar to Lua: based on trunk top radius
+    # crown radius based on trunk top radius
     crownRad = max(0.2, (CR[pTrunkIter] if CR[pTrunkIter] else baseR) * 0.15)
 
     baseLeafL = 120.0 * pSize * pLeafLengthScale
 
-    # Full frond generator (used by canopy build)
+    # Full frond generator
     def generate_frond(azimuth, phi, L, leaf_index, rStart, outScale, sagDelay, safeDelay, avoidScale, lowSagScale):
         # local rng usage
         # build local basis R from ux/vx and given azimuth
@@ -625,15 +602,22 @@ def generate_palm_tree(params, palette_name, grid_size=GRID, preview=False, prog
 def generate_palm_preview(params, palette_name, grid_size=PREVIEW_GRID, view='front', progress_callback=None, cancel_check=None):
     try:
         vox, palette = generate_palm_tree(params, palette_name, grid_size=GRID, preview=False, progress_callback=progress_callback, cancel_check=cancel_check)
+        if isinstance(vox, np.ndarray):
+            vox = np.swapaxes(vox, 1, 2)
         img_full = project_voxels_to_image(vox, palette, GRID, view=view)
         return img_full.resize((grid_size * 3, grid_size * 3), Image.NEAREST)
+    except CancelledError:
+        raise
     except Exception:
         shrink = grid_size / GRID
         params_preview = params.copy()
-        params_preview['size'] = params_preview.get('size',1.0) * shrink
-        vox, palette = generate_palm_tree(params_preview, palette_name, grid_size=grid_size, preview=True)
+        params_preview['size'] *= shrink
+        params_preview['trunksize'] *= shrink
+        vox, palette = generate_palm_tree(params_preview, palette_name, grid_size=grid_size, preview=True, progress_callback=progress_callback, cancel_check=cancel_check)
+        if isinstance(vox, np.ndarray):
+            vox = np.swapaxes(vox, 1, 2)
         img = project_voxels_to_image(vox, palette, grid_size, view=view)
-        return img.resize((grid_size*3, grid_size*3), Image.NEAREST)
+        return img.resize((grid_size * 3, grid_size * 3), Image.NEAREST)
 
 def orient_voxels_for_export(voxels, view='front'):
     try:
@@ -648,10 +632,17 @@ def orient_voxels_for_export(voxels, view='front'):
 
 
 def export_palm(params, palette_name, prefix='palm', export_view='front'):
-    voxels, palette = generate_palm_tree(params, palette_name, grid_size=GRID, preview=True)
+    # Scale params to fit the tree within the 256 grid for export
+    params_scaled = params.copy()
+    scale_factor = 0.6  # Adjust to ensure max extent <= 256
+    params_scaled['size'] = params.get('size', 1.0) * scale_factor
+    params_scaled['trunkextend'] = params.get('trunkextend', 80.0) * scale_factor
+    params_scaled['leaflength'] = params.get('leaflength', 0.35) * scale_factor
+    params_scaled['trunksize'] = params.get('trunksize', 1.0) * scale_factor
+    voxels, palette = generate_palm_tree(params_scaled, palette_name, grid_size=GRID, preview=True)
     # Orient voxels for MagicaVoxel: swap Y/Z
     voxels_oriented = orient_voxels_for_export(voxels, view=export_view)
-    exporter = VoxExporter(params)
+    exporter = VoxExporter(params_scaled)
     loaded_palette, leaf_indices, trunk_indices = exporter.load_palette(palette_name) if palette_name else (palette, [9,17], [57,65])
     return exporter.export(voxels_oriented, loaded_palette, leaf_indices, trunk_indices, prefix, preview=False)
 

@@ -1,4 +1,3 @@
-# (full file content with local-RNG changes)
 import os
 import random
 import math
@@ -40,16 +39,21 @@ class CancelledError(Exception):
 
 # VoxExporter class reused
 class VoxExporter:
-    def __init__(self, params, palette_map=None, palette_subdir='pine', output_subdir='pine', counter_file='pinegen_counter.txt'):
+    def __init__(self, params, palette_map=None, palette_subdir='pine', output_subdir='pine'):
+        """
+        Simplified VoxExporter: no counter file, time-based filenames only.
+        Backwards-compatible with callers that pass (params, palette_map, palette_subdir, output_subdir).
+        """
         self.params = params
-        def _default_palette_map(key):
-            return {'leaves':[9,17],'trunk':[57,65]}
-        self.palette_map = palette_map or {'default': _default_palette_map('default')}
+        self.palette_map = palette_map or {'default': {'leaves': [9, 17], 'trunk': [57, 65]}}
         self.palette_subdir = palette_subdir
         self.output_subdir = output_subdir
-        self.counter_file = counter_file
 
     def load_palette(self, palette_name):
+        """
+        Prefer the internal palette registry when available. Do not attempt to load palettes from disk.
+        Returns (palette_list, leaf_indices, trunk_indices).
+        """
         key = os.path.basename(palette_name) if palette_name else 'default'
         try:
             if get_internal_palette and _palette_manager and key in _palette_manager.list_palettes():
@@ -58,9 +62,9 @@ class VoxExporter:
         except Exception:
             pass
 
-        path = resource_path(os.path.join('palettes', self.palette_subdir, key))
-        palette = load_palette_png(path) if palette_name else [(i, i, i, 255) for i in range(256)]
-        config = self.palette_map.get(key, next(iter(self.palette_map.values())))
+        # Fallback: simple grayscale palette and mapping from provided palette_map
+        palette = [(i, i, i, 255) for i in range(256)]
+        config = self.palette_map.get(key, next(iter(self.palette_map.values()))) if self.palette_map else {'leaves': [9,17], 'trunk': [57,65]}
         return palette, config.get('leaves', [9, 17]), config.get('trunk', [57, 65])
 
     def export(self, voxels, palette, leaf_indices, trunk_indices, prefix='pinegen', preview=False):
@@ -138,7 +142,7 @@ def generate_pinegen_tree(params, palette_name, grid_size=GRID, preview=False, p
     seed = int(params.get('seed', 1))
     rng = random.Random(seed)
 
-    exporter = VoxExporter(params, PINE_PALETTE_MAP, 'pine', 'pine', 'pinegen_counter.txt')
+    exporter = VoxExporter(params, PINE_PALETTE_MAP, 'pine', 'pine')
     palette, leaf_indices, trunk_indices = exporter.load_palette(palette_name) if palette_name else ([(i,i,i,255) for i in range(256)], [9,17], [57,65])
 
     voxels = np.zeros((grid_size, grid_size, grid_size), dtype=np.uint8)
@@ -300,34 +304,23 @@ def generate_pinegen_tree(params, palette_name, grid_size=GRID, preview=False, p
     return voxels, palette
 
 # generate_pinegen_preview moved here
-def generate_pinegen_preview(params, palette_name, grid_size=PREVIEW_GRID, progress_callback=None, cancel_check=None, view='front'):
-    """Produce a preview image that matches exported output.
-
-    Previously the preview scaled parameters and ran generation on a small grid,
-    which could produce different structure than the full export. To ensure the
-    preview always reflects the exported tree, generate the tree at full GRID
-    resolution and then project & downscale to the requested preview size.
+def generate_pinegen_preview(params, palette_name, grid_size=PREVIEW_GRID, view='front', progress_callback=None, cancel_check=None):
+    """
+    Worker-side preview: prefer returning a PIL.Image to minimize IPC overhead.
+    Falls back to scaled generation when the full-size path fails.
     """
     try:
-        # Generate full-resolution voxels using the exact params so indices/colors
-        # match the exporter (no parameter shrinking or approximations).
         vox, palette = generate_pinegen_tree(params, palette_name, grid_size=GRID, preview=False, progress_callback=progress_callback, cancel_check=cancel_check)
-
-        # Project full-resolution voxels to an image using the same projection used for export
         img_full = project_voxels_to_image(vox, palette, GRID, view=view)
-
-        # Downscale to the UI preview size (keep nearest neighbor to preserve palette indices)
         return img_full.resize((grid_size * 3, grid_size * 3), Image.NEAREST)
     except CancelledError:
-        # propagate cancellation
         raise
     except Exception:
-        # If full-generation fails (e.g., OOM on very constrained environments),
-        # fall back to the previous faster path that generates on a reduced grid.
+        # fallback: generate a smaller grid directly to avoid large IPC if full path failed
         shrink = grid_size / GRID
         params_preview = params.copy()
         params_preview['size'] *= shrink
-        params_preview['trunkheight'] *= shrink
+        params_preview['trunksize'] *= shrink
         vox, palette = generate_pinegen_tree(params_preview, palette_name, grid_size=grid_size, preview=True, progress_callback=progress_callback, cancel_check=cancel_check)
         img = project_voxels_to_image(vox, palette, grid_size, view=view)
         return img.resize((grid_size * 3, grid_size * 3), Image.NEAREST)
@@ -349,25 +342,10 @@ def orient_voxels_for_export(voxels, view='front'):
     except Exception:
         return voxels
 
-
 def export_pine(params, palette_name, prefix='pinegen', export_view='front'):
     voxels, palette = generate_pinegen_tree(params, palette_name, grid_size=GRID, preview=True)
     # Reorient voxels so exported file front matches preview front
     voxels_oriented = orient_voxels_for_export(voxels, view=export_view)
-    exporter = VoxExporter(params, PINE_PALETTE_MAP, 'pine', 'pine', 'pinegen_counter.txt')
+    exporter = VoxExporter(params, PINE_PALETTE_MAP, 'pine', 'pine')
     loaded_palette, leaf_indices, trunk_indices = exporter.load_palette(palette_name) if palette_name else (palette, [9,17], [57,65])
     return exporter.export(voxels_oriented, loaded_palette, leaf_indices, trunk_indices, prefix, preview=False)
-
-# Define the missing `load_palette_png` function
-def load_palette_png(filename):
-    """Load a palette PNG file and return a list of RGBA tuples."""
-    path = resource_path(filename)
-    try:
-        image = Image.open(path).convert("RGBA")
-        pixels = list(image.getdata())
-        if len(pixels) >= 256:
-            return pixels[:256]
-        return pixels + [(0, 0, 0, 0)] * (256 - len(pixels))
-    except Exception:
-        # Fallback grayscale palette
-        return [(i, i, i, 255) for i in range(256)]

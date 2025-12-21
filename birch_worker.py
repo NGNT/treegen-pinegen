@@ -1,4 +1,3 @@
-# (full file content with local-RNG changes)
 import os
 import random
 from datetime import datetime
@@ -30,34 +29,22 @@ def resource_path(filename):
         return os.path.join(_sys._MEIPASS, filename)
     return filename
 
-
 def clamp(v, mi, ma):
     return max(mi, min(ma, v))
 
-
-def load_palette_png(filename):
-    # try opening palette relative to project resources
-    path = resource_path(filename)
-    try:
-        image = PILImage.open(path).convert("RGBA")
-        pixels = list(image.getdata())
-        if len(pixels) >= 256:
-            return pixels[:256]
-        return pixels + [(0, 0, 0, 0)] * (256 - len(pixels))
-    except Exception:
-        # fallback grayscale palette
-        return [(i, i, i, 255) for i in range(256)]
-
-
 class VoxExporter:
-    def __init__(self, params, palette_map=None, palette_subdir='tree', output_subdir='tree', counter_file='birch_counter.txt'):
+    def __init__(self, params, palette_map=None, palette_subdir='tree', output_subdir='birch'):
+        # Ensure both `palette_subdir` and `output_subdir` are stored; default to 'tree'
         self.params = params
         self.palette_map = palette_map or {'default': {'leaves':[9,17],'trunk':[57,65]}}
         self.palette_subdir = palette_subdir
         self.output_subdir = output_subdir
-        self.counter_file = counter_file
 
     def load_palette(self, palette_name):
+        """
+        Prefer the internal palette registry if available. Do not attempt to load palette files from disk.
+        Returns (palette_list, leaf_indices, trunk_indices).
+        """
         key = os.path.basename(palette_name) if palette_name else 'default'
         try:
             if get_internal_palette and _palette_manager and key in _palette_manager.list_palettes():
@@ -65,10 +52,9 @@ class VoxExporter:
                 return palette, mapping.get('leaves', [9, 17]), mapping.get('trunk', [57, 65])
         except Exception:
             pass
-
-        path = resource_path(os.path.join('palettes', self.palette_subdir, key))
-        palette = load_palette_png(path) if palette_name else [(i, i, i, 255) for i in range(256)]
-        config = self.palette_map.get(key, next(iter(self.palette_map.values())))
+        # Fallback: return a simple grayscale palette and mapping from palette_map
+        palette = [(i, i, i, 255) for i in range(256)]
+        config = self.palette_map.get(key, next(iter(self.palette_map.values()))) if self.palette_map else {'leaves': [9,17], 'trunk': [57,65]}
         return palette, config.get('leaves', [9, 17]), config.get('trunk', [57, 65])
 
     def export(self, voxels, palette, leaf_indices, trunk_indices, prefix='birch', preview=False):
@@ -139,8 +125,6 @@ class VoxExporter:
 class CancelledError(Exception):
     pass
 
-
-# Ported generation logic (adapted from project core)
 def generate_birchgen_tree(params, palette_name, grid_size=GRID, preview=False, progress_callback=None, cancel_check=None):
     # Use local RNG so we don't reseed the global generator
     seed = int(params.get('seed', 1))
@@ -152,19 +136,43 @@ def generate_birchgen_tree(params, palette_name, grid_size=GRID, preview=False, 
     voxels = np.zeros((grid_size, grid_size, grid_size), dtype=np.uint8)
     gLeaves = []
 
-    iters = max(int(params.get('iterations', 1)), 1)
+    iters = max(int(params.get('iterations', 1)), 10)
     size = 150 * params.get('size', 1.0) / iters
+    # Read trunk height parameter and calculate total height
+    trunk_height_param = clamp(params.get('trunkheight', 1.0), 0.0, 5.0)
+    # Branch density control (exposed by the UI as 'branchdensity')
+    branch_density = clamp(params.get('branchdensity', 1.0), 0.0, 3.0)
+    # Branch length control (exposed by the UI as 'branchlength')
+    branch_length_param = clamp(params.get('branchlength', 1.0), 0.0, 3.0)
+    # Branch direction control (exposed by the UI as 'branchdir') - tilts branches on x-axis for droop
+    branch_dir_param = clamp(params.get('branchdir', -0.5), -5.0, 5.0)
+    # Twisted controls whole-tree twist (rotate branches around vertical axis)
+    twist_param = clamp(params.get('twisted', 0.5), 0.0, 4.0)
+    # Leaf radius control (exposed by the UI as 'leaf_radius')
+    leaf_radius_param = clamp(params.get('leaf_radius', 2.0), 1.0, 4.0)
+    # Leaf stretch control (exposed by the UI as 'leaf_stretch') - controls vertical elongation of leaves
+    leaf_stretch_param = clamp(params.get('leaf_stretch', 1.5), 0.5, 3.0)
+    # Leaf gravity control (exposed by the UI as 'leaf_gravity') - controls directional gravity of leaves (up/down)
+    leaf_gravity_param = clamp(params.get('leaf_gravity', 0.0), -1.0, 1.0)
     # Use a smaller trunk thickness multiplier for birch to keep trunks slender.
     # Scale by a reduced multiplier (3) rather than the Treegen core value to avoid overly thick trunks.
     gTrunkSize = (params.get('trunksize', 1.0) * 0.7 + 0.3) * params.get('size', 1.0) * 3
-    wide = min(params.get('wide', 0.5), 0.95)
     spread = clamp(params.get('spread', 0.4), 0.3, 0.8)  # moderate spread
-    gBranchLength0 = size * (1 - wide * 0.5)
-    gBranchLength1 = size * (wide * 0.5 + spread * 0.1)  # add slight spread influence
+    bend = clamp(params.get('bend', 0.0), 0.0, 1.0)
+    # Recompute branch length bases using `spread` (removed `wide` parameter)
+    gBranchLength0 = size * (1 - spread * 0.5)
+    gBranchLength1 = size * (spread * 0.5 + spread * 0.1)  # simplified influence
+    # force a trunk-first phase (no branching) for birch
+    TRUNK_PHASE = int(iters * 0.35)
 
     def normalize(x, y, z):
         l = math.sqrt(x*x + y*y + z*z)
         return (x/l, y/l, z/l) if l > 0 else (0,0,1)
+
+    def rotate_y(x, z, angle):
+        c = math.cos(angle)
+        s = math.sin(angle)
+        return x * c - z * s, x * s + z * c
 
     trunk_voxels = set()
 
@@ -192,18 +200,33 @@ def generate_birchgen_tree(params, palette_name, grid_size=GRID, preview=False, 
 
     def get_branch_length(i):
         t = math.sqrt((i - 1) / iters)
-        return gBranchLength0 + t * (gBranchLength1 - gBranchLength0)
+        # shorten outer branches for birch (whippy, short outer branches)
+        base_length = gBranchLength0 * (1 - t * 0.5) + gBranchLength1 * t
+        
+        if i <= TRUNK_PHASE:
+            # Trunk segments: scale by trunk height parameter only
+            height_scale = 0.5 + trunk_height_param * 0.3  # maps 0.0->0.5, 1.0->0.8, 5.0->2.0
+            return base_length * height_scale
+        else:
+            # Branch segments: scale by branch length parameter only
+            return base_length * branch_length_param
 
     def get_branch_size(i):
         t = math.sqrt((i - 1) / iters)
         return (1 - t) * gTrunkSize
 
     def get_branch_angle(i):
-        t = math.sqrt((i - 1) / iters)
-        return 2.0 * params.get('spread', 0.5) * 0.5 * t
+        # angle ramps up only after trunk phase; bias angles upward (in radians range)
+        t = (i - TRUNK_PHASE) / max(1, (iters - TRUNK_PHASE))
+        return clamp(0.15 + t * 0.25, 0.15, 0.4)
 
     def get_branch_prob(i):
-        return math.sqrt((i - 1) / iters)
+        if i <= TRUNK_PHASE:
+            return 0.0
+        t = (i - TRUNK_PHASE) / max(1, iters - TRUNK_PHASE)
+        base = clamp(0.3 + t * 0.5, 0.0, 1.0)
+        # scale branching probability to control density, clamp to [0,1]
+        return clamp(base * branch_density, 0.0, 1.0)
 
     progress_total = iters * 10
     progress_done = 0
@@ -221,15 +244,41 @@ def generate_birchgen_tree(params, palette_name, grid_size=GRID, preview=False, 
         draw_line(x, y, z, x1, y1, z1, s0, s1)
 
         if i < iters:
-            b = 1
-            var = i * 0.2 * params.get('twisted', 0.5)
-            if rng.random() < get_branch_prob(i):
-                b = 2
-                var = get_branch_angle(i)
+            # enforce trunk-only phase: grow straight up without branching
+            if i <= TRUNK_PHASE:
+                branches(x1, y1, z1, dx, dy, dz, i + 1)
+                # update progress and return early
+                progress_done += 1
+                if progress_callback:
+                    try:
+                        progress_callback(min(progress_done / progress_total, 1.0))
+                    except Exception:
+                        pass
+                return
+
+            # determine lateral variance (always define var before use)
+            # lateral variance driven by spread only; wide removed and twisted no longer affects variance
+            var = i * 0.12 * (spread * 0.9 if 'spread' in locals() else 0.0)
+            # let bend amplify lateral variance
+            var *= (1.0 + bend * 0.6)
+
+            # decide how many child branches; bias occasionally to 2 and possibly use a larger angle
+            b = 1 + (rng.random() < 0.4)
+            if rng.random() < get_branch_prob(i) * 0.6:
+                b = max(b, 2)
+                # use angle-derived variance for occasional larger-angle splits
+                var = max(var, get_branch_angle(i))
+
             for _ in range(b):
-                dx2 = dx + rng.uniform(-var, var)
-                dy2 = dy + rng.uniform(-var, var)
-                dz2 = dz + rng.uniform(-var, var)
+                # Apply whole-tree twist by rotating the parent direction around Y before spawning child directions.
+                # Angle scales with iteration so higher branches twist more; twist_param controls overall strength.
+                angle = twist_param * 0.15 * (i / max(1, iters))
+                rot_dx, rot_dz = rotate_y(dx, dz, angle)
+                base_dx, base_dy, base_dz = rot_dx, dy, rot_dz
+                # bias child directions upward and allow bend to influence lateral components
+                dx2 = base_dx + rng.uniform(-var, var) + bend * 0.25 * rng.uniform(-1.0, 1.0) + branch_dir_param * 0.05
+                dy2 = base_dy + rng.uniform(-var, var) + bend * 0.25 * rng.uniform(-1.0, 1.0)
+                dz2 = base_dz + rng.uniform(-var, var * 0.6) - bend * 0.05 * rng.random()
                 dx2, dy2, dz2 = normalize(dx2, dy2, dz2)
                 branches(x1, y1, z1, dx2, dy2, dz2, i + 1)
         else:
@@ -261,23 +310,30 @@ def generate_birchgen_tree(params, palette_name, grid_size=GRID, preview=False, 
                 continue
             clusters = max(1, int(2 * params.get('leaves', 1.0)))
             for _c in range(clusters):
-                # start near the leaf source and perform a short random walk to populate a small cluster
-                x2 = x1 + rng.randint(-1, 1)
-                y2 = y1 + rng.randint(-1, 1)
-                z2 = z1 + rng.randint(-1, 1)
-                steps = max(2, int(8 * params.get('leaves', 1.0)))
+                # start near the leaf source and perform a random walk to populate a cluster
+                # scale initial offset by leaf radius
+                radius_int = int(leaf_radius_param)
+                # apply leaf stretch to z-direction for vertical elongation
+                stretch_radius_z = int(radius_int * leaf_stretch_param)
+                x2 = x1 + rng.randint(-radius_int, radius_int)
+                y2 = y1 + rng.randint(-radius_int, radius_int)
+                z2 = z1 + rng.randint(-stretch_radius_z, stretch_radius_z)
+                steps = max(2, int(5 * params.get('leaves', 1.0)))
                 for _ in range(steps):
                     # avoid placing leaves inside the trunk radius
                     if (x2 - trunk_center_x)**2 + (y2 - trunk_center_x)**2 > (trunk_radius + 0.5)**2:
                         leaf_set.add((x2, y2, z2))
-                    # favor downward movement for droop
-                    if rng.random() < 0.45:
-                        z2 += 1
+                    # apply leaf gravity for directional preference (up/down)
+                    gravity_prob = 0.5 + leaf_gravity_param * 0.5  # maps -1.0->0.0, 0.0->0.5, 1.0->1.0
+                    if rng.random() < gravity_prob:
+                        z2 -= 1  # upward movement
                     else:
-                        z2 += -1 if rng.random() < 0.4 else 0
-                    # small lateral jitter
-                    x2 += rng.choice([-1, 0, 1])
-                    y2 += rng.choice([-1, 0, 1])
+                        z2 += 1  # downward movement
+                    # scale lateral jitter by leaf radius, and z-jitter by stretch
+                    x2 += rng.choice([-radius_int, 0, radius_int])
+                    y2 += rng.choice([-radius_int, 0, radius_int])
+                    z2 += rng.choice([-stretch_radius_z, 0, stretch_radius_z])
+
         # Write leaf voxels into the voxel grid avoiding trunk voxels
         if leaf_set:
             leaf_idxs = leaf_indices if leaf_indices else [9]
@@ -311,7 +367,7 @@ def generate_birchgen_tree(params, palette_name, grid_size=GRID, preview=False, 
         else:
             trunk_radius = 1
     else:
-        trunk_height = min(grid_size - 2, max(8, int(size * iters * 0.9)))
+        trunk_height = min(grid_size - 2, max(8, int(size * iters * 0.9 * (0.5 + trunk_height_param * 0.3))))
         trunk_radius = max(1, int(math.ceil(params.get('trunksize', 1.0) * params.get('size', 1.0) * 2)))
 
     # Now add leaves using the recorded branch tips
@@ -364,12 +420,13 @@ def project_voxels_to_image(voxels, palette, grid_size, view='side'):
 
 
 def generate_birchgen_preview(params, palette_name, grid_size=PREVIEW_GRID, view='front', progress_callback=None, cancel_check=None):
-    """Produce a preview image that matches exported output by generating
-    at full resolution then downscaling. Falls back to reduced-grid preview on error."""
+    """
+    Birch worker preview wrapper. Returns PIL.Image when possible.
+    """
     try:
         vox, palette = generate_birchgen_tree(params, palette_name, grid_size=GRID, preview=False, progress_callback=progress_callback, cancel_check=cancel_check)
         img_full = project_voxels_to_image(vox, palette, GRID, view=view)
-        return img_full.resize((grid_size*3, grid_size*3), Image.NEAREST)
+        return img_full.resize((grid_size * 3, grid_size * 3), Image.NEAREST)
     except CancelledError:
         raise
     except Exception:
@@ -379,7 +436,7 @@ def generate_birchgen_preview(params, palette_name, grid_size=PREVIEW_GRID, view
         params_preview['trunksize'] *= shrink
         vox, palette = generate_birchgen_tree(params_preview, palette_name, grid_size=grid_size, preview=True, progress_callback=progress_callback, cancel_check=cancel_check)
         img = project_voxels_to_image(vox, palette, grid_size, view=view)
-        return img.resize((grid_size*3, grid_size*3), Image.NEAREST)
+        return img.resize((grid_size * 3, grid_size * 3), Image.NEAREST)
 
 
 def orient_voxels_for_export(voxels, view='front'):
@@ -404,37 +461,3 @@ def export_birch(params, palette_name, prefix='birch', export_view='front'):
     exporter = VoxExporter(params)
     loaded_palette, leaf_indices, trunk_indices = exporter.load_palette(palette_name) if palette_name else (palette, [9,17], [57,65])
     return exporter.export(voxels_oriented, loaded_palette, leaf_indices, trunk_indices, prefix, preview=False)
-
-
-# Birch preset and CLI
-def birch_preset(seed=None):
-    if seed is None:
-        seed = random.randint(1, 9999)
-    params = {
-        'seed': int(seed),
-        # slightly shorter overall scale for a medium-height birch
-        'size': 0.8,  # Reduced from 1.1 to 0.8 to lower the maximum scale
-        # slender trunk
-        'trunksize': 0.35,
-        # moderately open crown
-        'spread': 0.4,  # adjusted default for balance
-        # low branch twisting
-        'twisted': 0.1,
-        # modest leaf density (paper birch has many small leaves but not overly dense)
-        'leaves': 1.0,
-        # slight droop to branches/foliage
-        'gravity': 0.25,
-        # moderate branching complexity
-        'iterations': 10,
-        # bias toward shorter outer branches
-        'wide': 0.3,  # reduced default for less extreme wideness
-    }
-    return params
-
-
-def save_preview_image(img, out_dir='output', tag='birch'):
-    os.makedirs(out_dir, exist_ok=True)
-    fn = f"{tag}_preview_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.png"
-    path = os.path.join(out_dir, fn)
-    img.save(path)
-    return path

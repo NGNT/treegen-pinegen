@@ -1,8 +1,3 @@
-# Minimal PyQt6 scaffold for treegen/pinegen UI
-# Uses the existing tkinter script as a reference. This file is a starting point
-# for porting; it creates main window, tabs, headers (title left, logo right),
-# and a preview QLabel on the right � matching the layout of the tkinter version.
-
 import sys
 import os
 import concurrent.futures
@@ -29,23 +24,14 @@ import numpy as np
 from treegen_worker import generate_treegen_preview, generate_treegen_tree, export_tree
 from pinegen_worker import generate_pinegen_preview, generate_pinegen_tree, export_pine
 from birch_worker import generate_birchgen_preview, generate_birchgen_tree, export_birch
-
-# Attempt to import palm worker
-try:
-    from palm_worker import generate_palm_preview, generate_palm_tree, export_palm
-    PALM_AVAILABLE = True
-except Exception:
-    PALM_AVAILABLE = False
+from palm_worker import generate_palm_preview, generate_palm_tree, export_palm
+from kapok_worker import generate_kapok_preview, generate_kapok_tree, export_kapok
 
 # Use internal palette manager for UI lists (avoid relying on PNG files)
 try:
     import palette_worker
 except Exception:
     palette_worker = None
-
-# Fix birch script path detection to avoid calling resource_path before it's defined
-birch_script = os.path.join(os.path.dirname(__file__) or '.', 'birch_worker.py')
-BIRCH_AVAILABLE = os.path.exists(birch_script)
 
 # Determine core availability (workers present)
 try:
@@ -56,29 +42,25 @@ try:
 except NameError:
     CORE_AVAILABLE = False
 
-# Determine birch availability: set based on whether birch worker functions imported
+# Fix birch script path detection to avoid calling resource_path before it's defined
+birch_script = os.path.join(os.path.dirname(__file__) or '.', 'birch_worker.py')
+BIRCH_AVAILABLE = os.path.exists(birch_script)
+
 try:
     _ = (generate_birchgen_preview, generate_birchgen_tree, export_birch)
     BIRCH_AVAILABLE = True
 except NameError:
     BIRCH_AVAILABLE = False
 
-# Provide a simple local birch_preset for UI use (keeps UI functional without importing functions)
-def birch_preset(seed=None):
-    if seed is None:
-        seed = random.randint(1, 9999)
-    return {
-        'seed': int(seed),
-        'size': 1.1,
-        'trunksize': 0.35,
-        'spread': 0.5,
-        'twisted': 0.1,
-        'leaves': 1.0,
-        'gravity': 0.25,
-        'iterations': 6,
-        'wide': 0.1,
-    }
+try:
+    PALM_AVAILABLE = callable(generate_palm_tree)
+except Exception:
+    PALM_AVAILABLE = False
 
+try:
+    KAPOK_AVAILABLE = callable(generate_kapok_tree)
+except Exception:
+    KAPOK_AVAILABLE = False
 
 def resource_path(filename):
     if hasattr(_sys, '_MEIPASS'):
@@ -119,34 +101,49 @@ class PreviewThread(QThread):
 
     def run(self):
         try:
-            # Submit generation to process pool
+            # prefer worker-side preview functions; fall back to full generator if preview fn missing
             if self.mode == 'tree':
-                future = self.executor.submit(generate_treegen_tree, self.params, self.palette_name, grid_size=256, preview=False)
+                preview_fn = globals().get('generate_treegen_preview', None) or generate_treegen_preview
+                fallback_fn = globals().get('generate_treegen_tree', None) or generate_treegen_tree
             elif self.mode == 'pine':
-                future = self.executor.submit(generate_pinegen_tree, self.params, self.palette_name, grid_size=256, preview=False)
+                preview_fn = globals().get('generate_pinegen_preview', None) or generate_pinegen_preview
+                fallback_fn = globals().get('generate_pinegen_tree', None) or generate_pinegen_tree
             elif self.mode == 'birch':
-                future = self.executor.submit(generate_birchgen_tree, self.params, self.palette_name, grid_size=256, preview=False)
+                preview_fn = globals().get('generate_birchgen_preview', None) or generate_birchgen_preview
+                fallback_fn = globals().get('generate_birchgen_tree', None) or generate_birchgen_tree
             elif self.mode == 'palm':
-                future = self.executor.submit(generate_palm_tree, self.params, self.palette_name, grid_size=256, preview=False)
+                preview_fn = globals().get('generate_palm_preview', None) or generate_palm_preview
+                fallback_fn = globals().get('generate_palm_tree', None) or generate_palm_tree
+            elif self.mode == 'kapok':
+                preview_fn = globals().get('generate_kapok_preview', None) or generate_kapok_preview
+                fallback_fn = globals().get('generate_kapok_tree', None) or generate_kapok_tree
             else:
                 raise ValueError(f"Unknown mode: {self.mode}")
 
-            # Wait for result, checking for cancellation
+            # Submit the worker preview function (lighter IPC when it returns PIL.Image)
+            future = self.executor.submit(preview_fn, self.params, self.palette_name, 256)
+
+            # Wait loop with cooperative cancellation
             while not future.done():
                 if self._cancelled:
                     future.cancel()
                     self.error.emit('Cancelled')
                     return
-                self.msleep(50)  # poll every 50ms
+                self.msleep(50)
 
-            voxels, palette = future.result()
+            result = future.result()
 
-            # Project in main process
-            if self.mode == 'palm':
-                # Swap Y/Z for palm preview to match correct orientation
-                voxels = np.swapaxes(voxels, 1, 2)
-            img_full = project_voxels_to_image(voxels, palette, 256, view='front')
-            img = img_full.resize((192, 192), Image.NEAREST)  # 64*3=192
+            # If worker returned a PIL.Image, use it directly. Otherwise expect (voxels, palette)
+            if isinstance(result, Image.Image):
+                img_full = result
+            else:
+                voxels, palette = result
+                # keep legacy orientation fixes in main process only when needed
+                if self.mode in ('palm', 'kapok') and isinstance(voxels, np.ndarray):
+                    voxels = np.swapaxes(voxels, 1, 2)
+                img_full = project_voxels_to_image(voxels, palette, 256, view='front')
+
+            img = img_full.resize((192, 192), Image.NEAREST)
 
             if self._cancelled:
                 self.error.emit('Cancelled')
@@ -196,11 +193,13 @@ class TreegenQtMain(QWidget):
         self.pine_tab = QWidget()
         self.birch_tab = QWidget()
         self.palm_tab = QWidget()
+        self.kapok_tab = QWidget()
 
         self.tabs.addTab(self.tree_tab, "Treegen")
         self.tabs.addTab(self.pine_tab, "Pinegen")
         self.tabs.addTab(self.birch_tab, "Birchgen")
         self.tabs.addTab(self.palm_tab, "Palmgen")
+        self.tabs.addTab(self.kapok_tab, "Kapokgen")
 
         # timers for debouncing preview updates
         self.tree_preview_timer = QTimer(self)
@@ -218,6 +217,10 @@ class TreegenQtMain(QWidget):
         self.palm_preview_timer = QTimer(self)
         self.palm_preview_timer.setSingleShot(True)
         self.palm_preview_timer.timeout.connect(self._start_palm_preview)
+
+        self.kapok_preview_timer = QTimer(self)
+        self.kapok_preview_timer.setSingleShot(True)
+        self.kapok_preview_timer.timeout.connect(self._start_kapok_preview)
 
         # keep reference to running thread to avoid GC
         # track active preview threads (there can be overlapping ones)
@@ -241,6 +244,7 @@ class TreegenQtMain(QWidget):
         self.build_pine_tab()
         self.build_birch_tab()
         self.build_palm_tab()
+        self.build_kapok_tab()
 
         # Connect tab change to trigger preview
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -250,6 +254,7 @@ class TreegenQtMain(QWidget):
         self.pine_preview_timer.start(100)
         self.birch_preview_timer.start(100)
         self.palm_preview_timer.start(100)
+        self.kapok_preview_timer.start(100)
 
     def _map_slider_to_range(self, val, amin, amax, bmin, bmax):
         """Map value `val` in [amin, amax] to range [bmin, bmax].
@@ -802,7 +807,6 @@ class TreegenQtMain(QWidget):
 
         # Header for Birchgen
         header = self._make_header(tab, "Birchgen by NGNT", ("img/birchgen_image.png", "img/birch_text.png"), tint_color='#8B4513')  # Brown tint for birch
-        # Birch-themed header (browns and whites)
         try:
             header.setStyleSheet(
                 """
@@ -841,12 +845,11 @@ class TreegenQtMain(QWidget):
         controls_scroll.setStyleSheet("border: none; background: transparent;")
         controls_panel_layout.addWidget(controls_scroll)
 
-        # Palette combo for birch (use tree palettes for now)
+        # Palette combo for birch
         self.birch_palette_combo = QComboBox()
         try:
             if palette_worker is not None and hasattr(palette_worker, '_palette_manager'):
                 all_files = palette_worker._palette_manager.list_palettes()
-                # Filter to birch-related palettes
                 birch_palettes = [p for p in all_files if p in ['Birch Variant 1', 'White Birch', 'Yellow Birch', 'Gray Birch', 'Birch Variant 2']]
             else:
                 birch_palette_dir = resource_path(os.path.join("palettes", "tree"))
@@ -871,13 +874,26 @@ class TreegenQtMain(QWidget):
 
         # Sliders for birch parameters
         self.birch_size_slider, self.birch_size_range = self._create_float_slider(controls_layout, "Size", 0.1, 3.0, 1.1)
-        # Birch trunks are typically slender; lower range and default to keep trunks thin
-        self.birch_trunk_slider, self.birch_trunk_range = self._create_float_slider(controls_layout, "Trunk Size", 0.05, 0.8, 0.28)
-        self.birch_spread_slider, self.birch_spread_range = self._create_float_slider(controls_layout, "Spread", 0.1, 0.4, 0.24)
-        self.birch_twist_slider, self.birch_twist_range = self._create_float_slider(controls_layout, "Twist", 0.0, 1.0, 0.1)
+        self.birch_trunk_slider, self.birch_trunk_range = self._create_float_slider(controls_layout, "Trunk Size", 0.05, 2.0, 0.7)
+        self.birch_trunkheight_slider, self.birch_trunkheight_range = self._create_float_slider(controls_layout, "Trunk Height", 0.0, 5.0, 1.0)
+
+        # Important: expose Wide and Twist so birch_worker sees their values
+        self.birch_wide_slider, self.birch_wide_range = self._create_float_slider(controls_layout, "Wide", 0.0, 1.0, 0.5)
+        self.birch_spread_slider, self.birch_spread_range = self._create_float_slider(controls_layout, "Spread", 0.0, 1.0, 0.1)
+        self.birch_twist_slider, self.birch_twist_range = self._create_float_slider(controls_layout, "Twist", 0.0, 1.0, 0.5)
+
+        # Branch and leaf controls
+        self.birch_branchdensity_slider, self.birch_branchdensity_range = self._create_float_slider(controls_layout, "Branch Density", 0.0, 3.0, 1.0)
+        self.birch_branchlength_slider, self.birch_branchlength_range = self._create_float_slider(controls_layout, "Branch Length", 0.0, 3.0, 1.0)
+        self.birch_branchdir_slider, self.birch_branchdir_range = self._create_float_slider(controls_layout, "Branch Direction", -5.0, 5.0, -0.5)
         self.birch_leaves_slider, self.birch_leaves_range = self._create_float_slider(controls_layout, "Leafiness", 0.0, 3.0, 1.0)
-        self.birch_gravity_slider, self.birch_gravity_range = self._create_float_slider(controls_layout, "Gravity", -1.0, 1.0, 0.25)
-        self.birch_wide_slider, self.birch_wide_range = self._create_float_slider(controls_layout, "Wide", 0.05, 0.2, 0.1)
+
+        # Leaf appearance
+        self.birch_leaf_radius_slider, self.birch_leaf_radius_range = self._create_float_slider(controls_layout, "Leaf Radius", 1.0, 4.0, 2.0)
+        self.birch_leaf_stretch_slider, self.birch_leaf_stretch_range = self._create_float_slider(controls_layout, "Leaf Stretch", 0.5, 3.0, 1.5)
+        self.birch_leaf_gravity_slider, self.birch_leaf_gravity_range = self._create_float_slider(controls_layout, "Leaf Gravity", -1.0, 1.0, 0.25)
+
+        self.birch_bend_slider, self.birch_bend_range = self._create_float_slider(controls_layout, "Bend", 0.0, 1.0, 0.0)
 
         # Apply birch-themed slider styles
         birch_slider_style = """
@@ -886,7 +902,12 @@ class TreegenQtMain(QWidget):
         QSlider::handle:horizontal { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #D2B48C, stop:1 #8B4513); border: 1px solid #8B4513; width: 18px; margin: -5px 0; border-radius: 9px; }
         QSlider::handle:horizontal:hover { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #F5DEB3, stop:1 #A0522D); }
         """
-        for slider in [self.birch_size_slider, self.birch_trunk_slider, self.birch_spread_slider, self.birch_twist_slider, self.birch_leaves_slider, self.birch_gravity_slider, self.birch_wide_slider]:
+        for slider in [
+            self.birch_size_slider, self.birch_trunk_slider, self.birch_trunkheight_slider, self.birch_wide_slider, self.birch_spread_slider, self.birch_twist_slider,
+            self.birch_branchdensity_slider, self.birch_branchlength_slider, self.birch_branchdir_slider,
+            self.birch_leaves_slider, self.birch_leaf_radius_slider, self.birch_leaf_stretch_slider, self.birch_leaf_gravity_slider,
+            self.birch_bend_slider
+        ]:
             slider.setStyleSheet(birch_slider_style)
 
         controls_layout.addWidget(QLabel("Iterations"))
@@ -894,7 +915,7 @@ class TreegenQtMain(QWidget):
         iterations_label.setStyleSheet("color: #8B4513; font-weight: 500;")
         controls_layout.addWidget(iterations_label)
         self.birch_iterations_spin = QSpinBox()
-        self.birch_iterations_spin.setRange(5, 14)
+        self.birch_iterations_spin.setRange(7, 14)
         self.birch_iterations_spin.setValue(8)
         self.birch_iterations_spin.setStyleSheet(
             """
@@ -907,7 +928,6 @@ class TreegenQtMain(QWidget):
 
         # Seed (slider 1..9999)
         self.birch_seed_slider, self.birch_seed_range = self._create_float_slider(controls_layout, "Seed", 1, 9999, 1)
-        # apply birch slider style already defined above
         self.birch_seed_slider.setStyleSheet(birch_slider_style)
 
         self.birch_progress = QProgressBar()
@@ -922,7 +942,7 @@ class TreegenQtMain(QWidget):
         controls_layout.addStretch(1)
         content_layout.addWidget(controls_panel, 1)
 
-        # Right preview area
+        # Right preview area (unchanged)
         preview_layout = QVBoxLayout()
         preview_frame_widget = QWidget()
         preview_frame_widget.setLayout(preview_layout)
@@ -940,7 +960,6 @@ class TreegenQtMain(QWidget):
             "QPushButton:disabled { background: #A0522D; color: #F5DEB3; }"
         )
 
-        # top row (buttons)
         top_row = QHBoxLayout()
         top_row.addStretch(1)
         self.birch_randomize_btn = QPushButton("Randomize")
@@ -953,12 +972,11 @@ class TreegenQtMain(QWidget):
         top_row.addWidget(self.birch_generate_btn)
         top_row.addStretch(1)
         btn_container_layout.addLayout(top_row)
-        # checkbox row under buttons
+
         chk_row = QHBoxLayout()
         chk_row.addStretch(1)
         self.birch_open_after = QCheckBox("Open file after generation")
         self.birch_open_after.setChecked(True)
-        # Styled checkbox for visibility on dark panels
         self.birch_open_after.setStyleSheet(
             """
             QCheckBox { color: #e7f6ef; spacing: 6px; }
@@ -972,7 +990,6 @@ class TreegenQtMain(QWidget):
         btn_container_layout.addLayout(chk_row)
         preview_layout.addWidget(btn_container)
 
-        # Center vertically and align preview to the right
         preview_layout.addStretch(1)
 
         self.birch_preview = QLabel()
@@ -988,13 +1005,12 @@ class TreegenQtMain(QWidget):
         preview_layout.addStretch(1)
         content_layout.addWidget(preview_frame_widget)
 
-        # Leave preview empty until first generated preview appears
-        self.birch_preview.setText("")
-
-        # Connect controls to debounce timer
+        # Connect controls to debounce timer (include new sliders)
         controls = [
-            self.birch_size_slider, self.birch_trunk_slider, self.birch_spread_slider, self.birch_twist_slider,
-            self.birch_leaves_slider, self.birch_gravity_slider, self.birch_wide_slider,
+            self.birch_size_slider, self.birch_trunk_slider, self.birch_trunkheight_slider, self.birch_wide_slider, self.birch_spread_slider, self.birch_twist_slider,
+            self.birch_branchdensity_slider, self.birch_branchlength_slider, self.birch_branchdir_slider,
+            self.birch_leaves_slider, self.birch_leaf_radius_slider, self.birch_leaf_stretch_slider, self.birch_leaf_gravity_slider,
+            self.birch_bend_slider,
             self.birch_iterations_spin, self.birch_seed_slider, self.birch_palette_combo
         ]
         for c in controls:
@@ -1008,136 +1024,6 @@ class TreegenQtMain(QWidget):
         # start initial preview
         self.birch_preview_timer.start(100)
 
-    def _start_tree_preview(self):
-        if not CORE_AVAILABLE:
-            return
-        # assemble params from all controls
-        def s2r(slider, r):
-            v = slider.value()
-            amin, amax = r
-            return amin + (amax - amin) * (v / 1000.0)
-        params = {
-            'size': s2r(self.tree_size_slider, self.tree_size_range),
-            'trunksize': s2r(self.tree_trunk_slider, self.tree_trunk_range),
-            'spread': s2r(self.tree_spread_slider, self.tree_spread_range),
-            'twisted': s2r(self.tree_twist_slider, self.tree_twist_range),
-            'leaves': s2r(self.tree_leaves_slider, self.tree_leaves_range),
-            'gravity': s2r(self.tree_gravity_slider, self.tree_gravity_range),
-            'iterations': self.tree_iterations_spin.value(),
-            'wide': s2r(self.tree_wide_slider, self.tree_wide_range),
-            'seed': int(s2r(self.tree_seed_slider, self.tree_seed_range))
-        }
-        palette = self.tree_palette_combo.currentText() if self.tree_palette_combo.count() > 0 else ''
-        # update estimated dimensions right away (estimator functions removed)
-        try:
-            # estimator removed; clear or keep existing label empty
-            self.tree_dim_label.setText("")
-        except Exception:
-            pass
-        # start thread (cancel any running)
-        # cancel any running preview and start a new one; keep track of threads
-        if self._preview_thread is not None and self._preview_thread.isRunning():
-            try:
-                self._preview_thread.cancel()
-            except Exception:
-                pass
-        thr = PreviewThread('tree', params, palette, self._export_executor, parent=self)
-        self._register_preview_thread(thr)
-        self._preview_thread = thr
-        thr.progress.connect(self._on_tree_preview_progress)
-        thr.finished.connect(self._on_preview_ready)
-        thr.error.connect(self._on_preview_error)
-        thr.finished.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
-        thr.error.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
-        # show preview progress as indeterminate since no progress from subprocess
-        self.tree_preview_progress.setRange(0, 0)
-        self.tree_preview_progress.setVisible(True)
-        thr.start()
-
-    def _start_pine_preview(self):
-        if not CORE_AVAILABLE:
-            return
-        def s2r(slider, r):
-            v = slider.value()
-            amin, amax = r
-            return amin + (amax - amin) * (v / 1000.0)
-        params = {
-            'size': s2r(self.pine_size_slider, self.pine_size_range),
-            'twisted': s2r(self.pine_twist_slider, self.pine_twist_range),
-            'trunksize': s2r(self.pine_trunk_slider, self.pine_trunk_range),
-            'trunkheight': s2r(self.pine_trunkheight_slider, self.pine_trunkheight_range),
-            'branchdensity': s2r(self.pine_branchdensity_slider, self.pine_branchdensity_range),
-            'branchlength': s2r(self.pine_branchlength_slider, self.pine_branchlength_range),
-            'branchdir': s2r(self.pine_branchdir_slider, self.pine_branchdir_range),
-            'leaves': s2r(self.pine_leaves_slider, self.pine_leaves_range),
-            'leaf_radius': s2r(self.pine_leaf_radius_slider, self.pine_leaf_radius_range),
-            'leaf_stretch': s2r(self.pine_leaf_stretch_slider, self.pine_leaf_stretch_range),
-            'leaf_bias': s2r(self.pine_leaf_bias_slider, self.pine_leaf_bias_range),
-            'seed': int(s2r(self.pine_seed_slider, self.pine_seed_range))
-        }
-        palette = self.pine_palette_combo.currentText() if self.pine_palette_combo.count() > 0 else ''
-        # estimator removed; clear pine dim label
-        try:
-            self.pine_dim_label.setText("")
-        except Exception:
-            pass
-        if self._preview_thread is not None and self._preview_thread.isRunning():
-            try:
-                self._preview_thread.cancel()
-            except Exception:
-                pass
-        thr = PreviewThread('pine', params, palette, self._export_executor, parent=self)
-        self._register_preview_thread(thr)
-        self._preview_thread = thr
-        thr.progress.connect(self._on_pine_preview_progress)
-        thr.finished.connect(self._on_preview_ready)
-        thr.error.connect(self._on_preview_error)
-        thr.finished.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
-        thr.error.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
-        self.pine_preview_progress.setRange(0, 0)
-        self.pine_preview_progress.setVisible(True)
-        thr.start()
-
-    def _start_birch_preview(self):
-        if not BIRCH_AVAILABLE:
-            return
-        def s2r(slider, r):
-            v = slider.value()
-            amin, amax = r
-            return amin + (amax - amin) * (v / 1000.0)
-        params = {
-            'size': s2r(self.birch_size_slider, self.birch_size_range),
-            'trunksize': s2r(self.birch_trunk_slider, self.birch_trunk_range),
-            'spread': s2r(self.birch_spread_slider, self.birch_spread_range),
-            'twisted': s2r(self.birch_twist_slider, self.birch_twist_range),
-            'leaves': s2r(self.birch_leaves_slider, self.birch_leaves_range),
-            'gravity': s2r(self.birch_gravity_slider, self.birch_gravity_range),
-            'iterations': self.birch_iterations_spin.value(),
-            'wide': s2r(self.birch_wide_slider, self.birch_wide_range),
-            'seed': int(s2r(self.birch_seed_slider, self.birch_seed_range))
-        }
-        palette = self.birch_palette_combo.currentText() if self.birch_palette_combo.count() > 0 else ''
-        try:
-            self.birch_dim_label.setText("")
-        except Exception:
-            pass
-        if self._preview_thread is not None and self._preview_thread.isRunning():
-            try:
-                self._preview_thread.cancel()
-            except Exception:
-                pass
-        thr = PreviewThread('birch', params, palette, self._export_executor, parent=self)
-        self._register_preview_thread(thr)
-        self._preview_thread = thr
-        thr.progress.connect(self._on_birch_preview_progress)
-        thr.finished.connect(self._on_preview_ready)
-        thr.error.connect(self._on_preview_error)
-        thr.finished.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
-        thr.error.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
-        self.birch_preview_progress.setRange(0, 0)
-        self.birch_preview_progress.setVisible(True)
-        thr.start()
-    
     def build_palm_tab(self):
         tab = self.palm_tab
         main_layout = QVBoxLayout(tab)
@@ -1200,7 +1086,7 @@ class TreegenQtMain(QWidget):
 
         # Palm sliders matching voxcscript parameters
         self.palm_size_slider, self.palm_size_range = self._create_float_slider(controls_layout, "Size", 0.1, 2.0, 1.0)
-        self.palm_trunkextend_slider, self.palm_trunkextend_range = self._create_float_slider(controls_layout, "Trunk Height", 0.0, 340.0, 80.0)
+        self.palm_trunkextend_slider, self.palm_trunkextend_range = self._create_float_slider(controls_layout, "Trunk Height", 0.0, 150.0, 80.0)
         self.palm_trunksize_slider, self.palm_trunksize_range = self._create_float_slider(controls_layout, "Trunk Width", 0.3, 4.0, 1.0)
         self.palm_trunkiter_slider, self.palm_trunkiter_range = self._create_float_slider(controls_layout, "Trunk Iter", 12, 80, 40)
         self.palm_bend_slider, self.palm_bend_range = self._create_float_slider(controls_layout, "Bend", 0.0, 1.0, 1.0)
@@ -1210,11 +1096,11 @@ class TreegenQtMain(QWidget):
         self.palm_leafcount_value.setStyleSheet("color: #e9d8c1; font-weight: 500;")
         controls_layout.addWidget(self.palm_leafcount_value)
         self.palm_leafcount_slider.valueChanged.connect(lambda: self.palm_leafcount_value.setText(f"{int(self._map_slider_to_range(self.palm_leafcount_slider.value(), 0, 1000, 4, 72))}"))
-        self.palm_leaflength_slider, self.palm_leaflength_range = self._create_float_slider(controls_layout, "Frond Length", 0.1, 3.0, 0.35)
+        self.palm_leaflength_slider, self.palm_leaflength_range = self._create_float_slider(controls_layout, "Frond Length", 0.1, 1.5, 0.35)
         self.palm_leafvar_slider, self.palm_leafvar_range = self._create_float_slider(controls_layout, "Frond Var", 0.0, 1.0, 0.5)
         self.palm_frondrandom_slider, self.palm_frondrandom_range = self._create_float_slider(controls_layout, "Frond Random", 0.0, 1.0, 1.0)
         self.palm_gravity_slider, self.palm_gravity_range = self._create_float_slider(controls_layout, "Gravity", 0.0, 1.0, 0.3)
-        self.palm_leafwidth_slider, self.palm_leafwidth_range = self._create_float_slider(controls_layout, "Frond Width", 0.1, 1.0, 0.25)
+        self.palm_leafwidth_slider, self.palm_leafwidth_range = self._create_float_slider(controls_layout, "Frond Width", 0.1, 0.7, 0.25)
         # Palm-themed slider style (matches palm button colors)
         palm_slider_style = """
         QSlider { background: transparent; }
@@ -1334,6 +1220,382 @@ class TreegenQtMain(QWidget):
         # start initial preview
         self.palm_preview_timer.start(100)
 
+    def build_kapok_tab(self):
+        tab = self.kapok_tab
+        main_layout = QVBoxLayout(tab)
+
+        header = self._make_header(tab, "Kapokgen by NGNT", ("img/kapokgen_image.png", "img/kapokgen_text.png"), tint_color='#7c4f2a')
+        try:
+            header.setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3a2b20, stop:1 #1b1208); border-bottom: 2px solid #8a5a32;")
+        except Exception:
+            pass
+        main_layout.addWidget(header)
+
+        content_layout = QHBoxLayout()
+        main_layout.addLayout(content_layout)
+
+        # Controls panel (left)
+        controls_panel = QFrame()
+        controls_panel.setStyleSheet(
+            "background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #3b2f25, stop:1 #24180f);"
+            " border: 1px solid #5a3e2a; border-radius: 6px;"
+        )
+        controls_panel_layout = QVBoxLayout(controls_panel)
+        controls_panel_layout.setContentsMargins(12, 12, 12, 12)
+        controls_panel_layout.setSpacing(8)
+
+        panel_title = QLabel("Kapok Settings")
+        panel_title.setStyleSheet("font-weight: 600; color: #ecdcc8;")
+        controls_panel_layout.addWidget(panel_title)
+
+        controls_layout = QVBoxLayout()
+        controls_frame_widget = QWidget()
+        controls_frame_widget.setLayout(controls_layout)
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setWidget(controls_frame_widget)
+        controls_scroll.setStyleSheet("border: none; background: transparent;")
+        controls_panel_layout.addWidget(controls_scroll)
+
+        # Palette combo
+        self.kapok_palette_combo = QComboBox()
+        try:
+            if palette_worker is not None and hasattr(palette_worker, '_palette_manager'):
+                all_files = palette_worker._palette_manager.list_palettes()
+                kapok_palettes = [p for p in all_files if 'kapok' in p.lower() or 'tropical' in p.lower() or 'tree' in p.lower()]
+            else:
+                kapok_palette_dir = resource_path(os.path.join("palettes", "kapok"))
+                kapok_palettes = [f for f in os.listdir(kapok_palette_dir) if f.endswith('.png')]
+        except Exception:
+            kapok_palettes = []
+        if kapok_palettes:
+            self.kapok_palette_combo.addItems(kapok_palettes)
+        controls_layout.addWidget(QLabel("Palette"))
+        controls_layout.addWidget(self.kapok_palette_combo)
+        try:
+            self.kapok_palette_combo.setView(QListView())
+            self.kapok_palette_combo.setStyleSheet(
+                """
+                QComboBox { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #7c4f2a, stop:1 #5a3e2a); color: #ffffff; border: 1px solid #5a3e2a; border-radius: 4px; padding: 4px; }
+                QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: top right; width: 20px; border-left: 1px solid #5a3e2a; }
+                QComboBox QAbstractItemView { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #7c4f2a, stop:1 #5a3e2a); color: #ffffff; selection-background-color: #c79a6a; selection-color: #ffffff; border: 1px solid #5a3e2a; }
+                """
+            )
+        except Exception:
+            pass
+
+        # Kapok sliders (use _create_float_slider to keep mapping consistent)
+        self.kapok_size_slider, self.kapok_size_range = self._create_float_slider(controls_layout, "Size", 0.1, 2.0, 1.0)
+        self.kapok_trunkextend_slider, self.kapok_trunkextend_range = self._create_float_slider(controls_layout, "Trunk Extend", 0.0, 100.0, 0.0)
+        self.kapok_trunksize_slider, self.kapok_trunksize_range = self._create_float_slider(controls_layout, "Trunk Size", 0.3, 2.0, 1.0)
+        self.kapok_trunkiter_slider, self.kapok_trunkiter_range = self._create_float_slider(controls_layout, "Trunk Iter", 8, 40, 40)
+        self.kapok_bend_slider, self.kapok_bend_range = self._create_float_slider(controls_layout, "Bend", 0.0, 1.0, 0.5)
+
+        # Root controls
+        controls_layout.addWidget(QLabel("Roots"))
+        self.kapok_roottwist_slider, self.kapok_roottwist_range = self._create_float_slider(controls_layout, "Root Twist", 0.0, 1.0, 0.3)
+        self.kapok_rootprofile_slider, self.kapok_rootprofile_range = self._create_float_slider(controls_layout, "Root Profile", 0.0, 1.0, 0.5)
+        self.kapok_rootspread_slider, self.kapok_rootspread_range = self._create_float_slider(controls_layout, "Root Spread", 0.0, 1.0, 0.5)
+        self.kapok_rootcount_spin = QSpinBox()
+        self.kapok_rootcount_spin.setRange(0, 8)
+        self.kapok_rootcount_spin.setValue(5)
+        self.kapok_rootcount_spin.setStyleSheet("QSpinBox { background: #3b2f25; color: #ecdcc8; border: 1px solid #5a3e2a; }")
+        controls_layout.addWidget(QLabel("Root Count"))
+        controls_layout.addWidget(self.kapok_rootcount_spin)
+        self.kapok_rootvariance_slider, self.kapok_rootvariance_range = self._create_float_slider(controls_layout, "Root Variance", 0.0, 1.0, 1.0)
+
+        # Canopy controls
+        controls_layout.addWidget(QLabel("Canopy"))
+        self.kapok_canopyiter_spin = QSpinBox()
+        self.kapok_canopyiter_spin.setRange(5, 15)
+        self.kapok_canopyiter_spin.setValue(12)
+        self.kapok_canopyiter_spin.setStyleSheet("QSpinBox { background: #3b2f25; color: #ecdcc8; border: 1px solid #5a3e2a; }")
+        controls_layout.addWidget(QLabel("Canopy Iterations"))
+        controls_layout.addWidget(self.kapok_canopyiter_spin)
+
+        self.kapok_wide_slider, self.kapok_wide_range = self._create_float_slider(controls_layout, "Wide", 0.0, 1.0, 0.6)
+        self.kapok_spread_slider, self.kapok_spread_range = self._create_float_slider(controls_layout, "Spread", 0.0, 1.0, 0.5)
+        self.kapok_canopytwist_slider, self.kapok_canopytwist_range = self._create_float_slider(controls_layout, "Canopy Twist", 0.0, 1.0, 0.5)
+        self.kapok_leaves_slider, self.kapok_leaves_range = self._create_float_slider(controls_layout, "Leafiness", 0.0, 3.0, 0.7)
+        self.kapok_gravity_slider, self.kapok_gravity_range = self._create_float_slider(controls_layout, "Gravity", -1.0, 1.0, 0.0)
+        self.kapok_canopythick_slider, self.kapok_canopythick_range = self._create_float_slider(controls_layout, "Canopy Thick", 0.0, 1.0, 0.25)
+        self.kapok_canopyprofile_slider, self.kapok_canopyprofile_range = self._create_float_slider(controls_layout, "Canopy Profile", 0.0, 1.0, 0.9)
+        self.kapok_canopyflat_slider, self.kapok_canopyflat_range = self._create_float_slider(controls_layout, "Canopy Flatness", 0.0, 1.0, 0.75)
+        self.kapok_canopystart_slider, self.kapok_canopystart_range = self._create_float_slider(controls_layout, "Canopy Start", 0.0, 1.0, 0.75)
+        # Seed
+        self.kapok_seed_slider, self.kapok_seed_range = self._create_float_slider(controls_layout, "Seed", 1, 9999, 1)
+        # Kapok-themed slider style (warm/tropical earth tones)
+        kapok_slider_style = """
+        QSlider { background: transparent; }
+        QSlider::groove:horizontal { height: 8px; background: #4a392f; border-radius: 4px; }
+        QSlider::sub-page:horizontal { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #c79a6a, stop:1 #8a5a32); border-radius: 4px; }
+        QSlider::handle:horizontal {
+            background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #d29439, stop:1 #8a5a32);
+            border: 1px solid #6b4326; width: 18px; margin: -5px 0; border-radius: 9px;
+        }
+        QSlider::handle:horizontal:hover {
+            background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #e5b26a, stop:1 #a26b32);
+        }
+        """
+
+        # Apply style to kapok sliders and the canopy spinbox
+        kapok_sliders = [
+            self.kapok_size_slider, self.kapok_trunkextend_slider, self.kapok_trunksize_slider,
+            self.kapok_trunkiter_slider, self.kapok_bend_slider, self.kapok_roottwist_slider,
+            self.kapok_rootprofile_slider, self.kapok_rootspread_slider, self.kapok_rootvariance_slider,
+            self.kapok_wide_slider, self.kapok_spread_slider, self.kapok_canopytwist_slider,
+            self.kapok_leaves_slider, self.kapok_gravity_slider, self.kapok_canopythick_slider,
+            self.kapok_canopyprofile_slider, self.kapok_canopyflat_slider, self.kapok_canopystart_slider,
+            self.kapok_seed_slider
+        ]
+        for s in kapok_sliders:
+            try:
+                s.setStyleSheet(kapok_slider_style)
+            except Exception:
+                pass
+        # Style the canopy iterations spinbox to match Kapok theme
+        try:
+            self.kapok_canopyiter_spin.setStyleSheet(
+                "QSpinBox { background: #3b2f25; color: #ecdcc8; border: 1px solid #5a3e2a; border-radius: 4px; padding: 2px; }"
+                "QSpinBox::up-button, QSpinBox::down-button { background: #5a3e2a; border: none; }"
+            )
+        except Exception:
+            pass
+
+        # progress placeholders
+        self.kapok_progress = QProgressBar()
+        self.kapok_progress.setVisible(False)
+        controls_layout.addWidget(self.kapok_progress)
+
+        self.kapok_preview_progress = QProgressBar()
+        self.kapok_preview_progress.setVisible(False)
+        self.kapok_preview_progress.setRange(0, 100)
+        controls_layout.addWidget(self.kapok_preview_progress)
+
+        controls_layout.addStretch(1)
+        content_layout.addWidget(controls_panel, 1)
+
+        # Preview column (right)
+        preview_layout = QVBoxLayout()
+        preview_frame_widget = QWidget()
+        preview_frame_widget.setLayout(preview_layout)
+
+        btn_container = QFrame()
+        btn_container.setStyleSheet("background: #2f2318; border: 1px solid #5a3e2a; border-radius: 6px;")
+        btn_container_layout = QVBoxLayout(btn_container)
+        btn_container_layout.setContentsMargins(8, 6, 8, 6)
+        btn_container_layout.setSpacing(6)
+
+        _btn_style = (
+            "QPushButton { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #8a5a32, stop:1 #6b4326);"
+            " color: white; padding: 6px 12px; border: none; border-radius: 4px; font-weight: 600; }"
+            "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #9f6b3e, stop:1 #7c4f2a); }"
+            "QPushButton:disabled { background: #5a3e2a; color: #d8c8b8; }"
+        )
+
+        top_row = QHBoxLayout()
+        top_row.addStretch(1)
+        self.kapok_randomize_btn = QPushButton("Randomize")
+        self.kapok_randomize_btn.setStyleSheet(_btn_style)
+        self.kapok_randomize_btn.clicked.connect(self._randomize_kapok_sliders)
+        top_row.addWidget(self.kapok_randomize_btn)
+        self.kapok_generate_btn = QPushButton("Generate Kapok")
+        self.kapok_generate_btn.setStyleSheet(_btn_style)
+        self.kapok_generate_btn.clicked.connect(self._on_kapok_generate)
+        top_row.addWidget(self.kapok_generate_btn)
+        top_row.addStretch(1)
+        btn_container_layout.addLayout(top_row)
+
+        chk_row = QHBoxLayout()
+        chk_row.addStretch(1)
+        self.kapok_open_after = QCheckBox("Open file after generation")
+        self.kapok_open_after.setChecked(True)
+        self.kapok_open_after.setStyleSheet(
+            """
+            QCheckBox { color: #ecdcc8; spacing: 6px; }
+            QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; border: 1px solid #6b4523; background: #24180f; }
+            QCheckBox::indicator:unchecked { background: #24180f; }
+            QCheckBox::indicator:checked { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #f0c57a, stop:1 #d79a3c); border: 1px solid #b06a1f; }
+            """
+        )
+        chk_row.addWidget(self.kapok_open_after)
+        chk_row.addStretch(1)
+        btn_container_layout.addLayout(chk_row)
+        preview_layout.addWidget(btn_container)
+
+        preview_layout.addStretch(1)
+
+        self.kapok_preview = QLabel()
+        self.kapok_preview.setFixedSize(320, 320)
+        self.kapok_preview.setStyleSheet("background: #110b07; border: 1px solid #5a3e21;")
+        self.kapok_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.kapok_dim_label = QLabel("")
+        self.kapok_dim_label.setStyleSheet("color: #ecdcc8; font-weight: 500;")
+        self.kapok_dim_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview_layout.addWidget(self.kapok_dim_label)
+        preview_layout.addWidget(self.kapok_preview, 0, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+        preview_layout.addStretch(1)
+        content_layout.addWidget(preview_frame_widget)
+
+        self.kapok_preview.setText("")
+
+        # Connect controls to debounce timer
+        controls = [
+            self.kapok_size_slider, self.kapok_trunkextend_slider, self.kapok_trunksize_slider, self.kapok_trunkiter_slider,
+            self.kapok_bend_slider, self.kapok_roottwist_slider, self.kapok_rootprofile_slider, self.kapok_rootspread_slider,
+            self.kapok_rootcount_spin, self.kapok_rootvariance_slider, self.kapok_canopyiter_spin,
+            self.kapok_wide_slider, self.kapok_spread_slider, self.kapok_canopytwist_slider, self.kapok_leaves_slider,
+            self.kapok_gravity_slider, self.kapok_canopythick_slider, self.kapok_canopyprofile_slider,
+            self.kapok_canopyflat_slider, self.kapok_canopystart_slider, self.kapok_seed_slider, self.kapok_palette_combo
+        ]
+        for c in controls:
+            if isinstance(c, QSlider):
+                c.valueChanged.connect(lambda _: self.kapok_preview_timer.start(300))
+            elif isinstance(c, QSpinBox):
+                c.valueChanged.connect(lambda _: self.kapok_preview_timer.start(300))
+            elif isinstance(c, QComboBox):
+                c.currentIndexChanged.connect(lambda _: self.kapok_preview_timer.start(300))
+
+        # start initial preview
+        self.kapok_preview_timer.start(100)
+
+    def _start_tree_preview(self):
+        if not CORE_AVAILABLE:
+            return
+        # assemble params from all controls
+        def s2r(slider, r):
+            v = slider.value()
+            amin, amax = r
+            return amin + (amax - amin) * (v / 1000.0)
+        params = {
+            'size': s2r(self.tree_size_slider, self.tree_size_range),
+            'trunksize': s2r(self.tree_trunk_slider, self.tree_trunk_range),
+            'spread': s2r(self.tree_spread_slider, self.tree_spread_range),
+            'twisted': s2r(self.tree_twist_slider, self.tree_twist_range),
+            'leaves': s2r(self.tree_leaves_slider, self.tree_leaves_range),
+            'gravity': s2r(self.tree_gravity_slider, self.tree_gravity_range),
+            'iterations': self.tree_iterations_spin.value(),
+            'wide': s2r(self.tree_wide_slider, self.tree_wide_range),
+            'seed': int(s2r(self.tree_seed_slider, self.tree_seed_range))
+        }
+        palette = self.tree_palette_combo.currentText() if self.tree_palette_combo.count() > 0 else ''
+        # update estimated dimensions right away (estimator functions removed)
+        try:
+            # estimator removed; clear or keep existing label empty
+            self.tree_dim_label.setText("")
+        except Exception:
+            pass
+        # start thread (cancel any running)
+        # cancel any running preview and start a new one; keep track of threads
+        if self._preview_thread is not None and self._preview_thread.isRunning():
+            try:
+                self._preview_thread.cancel()
+            except Exception:
+                pass
+        thr = PreviewThread('tree', params, palette, self._export_executor, parent=self)
+        self._register_preview_thread(thr)
+        self._preview_thread = thr
+        thr.progress.connect(self._on_tree_preview_progress)
+        thr.finished.connect(self._on_preview_ready)
+        thr.error.connect(self._on_preview_error)
+        thr.finished.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
+        thr.error.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
+        # show preview progress as indeterminate since no progress from subprocess
+        self.tree_preview_progress.setRange(0, 0)
+        self.tree_preview_progress.setVisible(True)
+        thr.start()
+
+    def _start_pine_preview(self):
+        if not CORE_AVAILABLE:
+            return
+        def s2r(slider, r):
+            v = slider.value()
+            amin, amax = r
+            return amin + (amax - amin) * (v / 1000.0)
+        params = {
+            'size': s2r(self.pine_size_slider, self.pine_size_range),
+            'twisted': s2r(self.pine_twist_slider, self.pine_twist_range),
+            'trunksize': s2r(self.pine_trunk_slider, self.pine_trunk_range),
+            'trunkheight': s2r(self.pine_trunkheight_slider, self.pine_trunkheight_range),
+            'branchdensity': s2r(self.pine_branchdensity_slider, self.pine_branchdensity_range),
+            'branchlength': s2r(self.pine_branchlength_slider, self.pine_branchlength_range),
+            'branchdir': s2r(self.pine_branchdir_slider, self.pine_branchdir_range),
+            'leaves': s2r(self.pine_leaves_slider, self.pine_leaves_range),
+            'leaf_radius': s2r(self.pine_leaf_radius_slider, self.pine_leaf_radius_range),
+            'leaf_stretch': s2r(self.pine_leaf_stretch_slider, self.pine_leaf_stretch_range),
+            'leaf_bias': s2r(self.pine_leaf_bias_slider, self.pine_leaf_bias_range),
+            'seed': int(s2r(self.pine_seed_slider, self.pine_seed_range))
+        }
+        palette = self.pine_palette_combo.currentText() if self.pine_palette_combo.count() > 0 else ''
+        # estimator removed; clear pine dim label
+        try:
+            self.pine_dim_label.setText("")
+        except Exception:
+            pass
+        if self._preview_thread is not None and self._preview_thread.isRunning():
+            try:
+                self._preview_thread.cancel()
+            except Exception:
+                pass
+        thr = PreviewThread('pine', params, palette, self._export_executor, parent=self)
+        self._register_preview_thread(thr)
+        self._preview_thread = thr
+        thr.progress.connect(self._on_pine_preview_progress)
+        thr.finished.connect(self._on_preview_ready)
+        thr.error.connect(self._on_preview_error)
+        thr.finished.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
+        thr.error.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
+        self.pine_preview_progress.setRange(0, 0)
+        self.pine_preview_progress.setVisible(True)
+        thr.start()
+
+    def _start_birch_preview(self):
+        if not BIRCH_AVAILABLE:
+            return
+        def s2r(slider, r):
+            v = slider.value()
+            amin, amax = r
+            return amin + (amax - amin) * (v / 1000.0)
+        params = {
+            'size': s2r(self.birch_size_slider, self.birch_size_range),
+            'trunksize': s2r(self.birch_trunk_slider, self.birch_trunk_range),
+            'trunkheight': s2r(self.birch_trunkheight_slider, self.birch_trunkheight_range) if hasattr(self, 'birch_trunkheight_slider') else 1.0,
+            'wide': s2r(self.birch_wide_slider, self.birch_wide_range),
+            'spread': s2r(self.birch_spread_slider, self.birch_spread_range),
+            'twisted': s2r(self.birch_twist_slider, self.birch_twist_range),
+            'bend': s2r(self.birch_bend_slider, self.birch_bend_range),
+            'branchdensity': s2r(self.birch_branchdensity_slider, self.birch_branchdensity_range),
+            'branchlength': s2r(self.birch_branchlength_slider, self.birch_branchlength_range),
+            'branchdir': s2r(self.birch_branchdir_slider, self.birch_branchdir_range),
+            'leaves': s2r(self.birch_leaves_slider, self.birch_leaves_range),
+            'leaf_radius': s2r(self.birch_leaf_radius_slider, self.birch_leaf_radius_range),
+            'leaf_stretch': s2r(self.birch_leaf_stretch_slider, self.birch_leaf_stretch_range),
+            'leaf_gravity': s2r(self.birch_leaf_gravity_slider, self.birch_leaf_gravity_range),
+            'iterations': self.birch_iterations_spin.value(),
+            'seed': int(s2r(self.birch_seed_slider, self.birch_seed_range))
+        }
+        palette = self.birch_palette_combo.currentText() if self.birch_palette_combo.count() > 0 else ''
+        try:
+            self.birch_dim_label.setText("")
+        except Exception:
+            pass
+        if self._preview_thread is not None and self._preview_thread.isRunning():
+            try:
+                self._preview_thread.cancel()
+            except Exception:
+                pass
+        thr = PreviewThread('birch', params, palette, self._export_executor, parent=self)
+        self._register_preview_thread(thr)
+        self._preview_thread = thr
+        thr.progress.connect(self._on_birch_preview_progress)
+        thr.finished.connect(self._on_preview_ready)
+        thr.error.connect(self._on_preview_error)
+        thr.finished.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
+        thr.error.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
+        self.birch_preview_progress.setRange(0, 0)
+        self.birch_preview_progress.setVisible(True)
+        thr.start()
+
     def _start_palm_preview(self):
         if not PALM_AVAILABLE:
             return
@@ -1373,6 +1635,73 @@ class TreegenQtMain(QWidget):
         self.palm_preview_progress.setVisible(True)
         thr.start()
 
+    def _start_kapok_preview(self):
+        if not KAPOK_AVAILABLE:
+            return
+        def s2r(slider, r):
+            v = slider.value()
+            amin, amax = r
+            return amin + (amax - amin) * (v / 1000.0)
+
+        params = {
+            'size': s2r(self.kapok_size_slider, self.kapok_size_range),
+            'trunkextend': s2r(self.kapok_trunkextend_slider, self.kapok_trunkextend_range),
+            'trunksize': s2r(self.kapok_trunksize_slider, self.kapok_trunksize_range),
+            'trunkiter': int(s2r(self.kapok_trunkiter_slider, self.kapok_trunkiter_range)),
+            'bend': s2r(self.kapok_bend_slider, self.kapok_bend_range),
+            'roottwist': s2r(self.kapok_roottwist_slider, self.kapok_roottwist_range),
+            'rootprofile': s2r(self.kapok_rootprofile_slider, self.kapok_rootprofile_range),
+            'rootspread': s2r(self.kapok_rootspread_slider, self.kapok_rootspread_range),
+            'rootcount': int(self.kapok_rootcount_spin.value()),
+            'rootvariance': s2r(self.kapok_rootvariance_slider, self.kapok_rootvariance_range),
+            'canopyiter': int(self.kapok_canopyiter_spin.value()),
+            'wide': s2r(self.kapok_wide_slider, self.kapok_wide_range),
+            'spread': s2r(self.kapok_spread_slider, self.kapok_spread_range),
+            'canopytwist': s2r(self.kapok_canopytwist_slider, self.kapok_canopytwist_range),
+            'leaves': s2r(self.kapok_leaves_slider, self.kapok_leaves_range),
+            'gravity': s2r(self.kapok_gravity_slider, self.kapok_gravity_range),
+            'canopythick': s2r(self.kapok_canopythick_slider, self.kapok_canopythick_range),
+            'canopyprofile': s2r(self.kapok_canopyprofile_slider, self.kapok_canopyprofile_range),
+            'canopyflat': s2r(self.kapok_canopyflat_slider, self.kapok_canopyflat_range),
+            'canopystart': s2r(self.kapok_canopystart_slider, self.kapok_canopystart_range),
+            'seed': int(s2r(self.kapok_seed_slider, self.kapok_seed_range)),
+        }
+
+        palette = self.kapok_palette_combo.currentText() if self.kapok_palette_combo.count() > 0 else ''
+        try:
+            self.kapok_dim_label.setText("")
+        except Exception:
+            pass
+
+        # cancel any running preview
+        if self._preview_thread is not None and self._preview_thread.isRunning():
+            try:
+                self._preview_thread.cancel()
+            except Exception:
+                pass
+
+        thr = PreviewThread('kapok', params, palette, self._export_executor, parent=self)
+        self._register_preview_thread(thr)
+        self._preview_thread = thr
+        # connect progress / finished / error handlers (implement _on_kapok_preview_progress if not already)
+        try:
+            thr.progress.connect(self._on_kapok_preview_progress)
+        except Exception:
+            pass
+        thr.finished.connect(self._on_preview_ready)
+        thr.error.connect(self._on_preview_error)
+        thr.finished.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
+        thr.error.connect(lambda *_args, t=thr: self._unregister_preview_thread(t))
+
+        # show indeterminate preview progress while subprocess runs
+        try:
+            self.kapok_preview_progress.setRange(0, 0)
+            self.kapok_preview_progress.setVisible(True)
+        except Exception:
+            pass
+
+        thr.start()
+
     def _start_preview_thread(self, mode, params, palette_name):
         # legacy single-entrypoint kept for compatibility; not used when full wiring present
         if mode == 'tree':
@@ -1404,6 +1733,12 @@ class TreegenQtMain(QWidget):
         except Exception:
             pass
 
+    def _on_kapok_preview_progress(self, p):
+        try:
+            self.kapok_preview_progress.setValue(int(p * 100))
+        except Exception:
+            pass
+
     def _on_preview_ready(self, pil_image, mode):
         # Convert PIL Image to QPixmap and set on corresponding preview label
         try:
@@ -1421,6 +1756,9 @@ class TreegenQtMain(QWidget):
             elif mode == 'palm':
                 self.palm_preview.setPixmap(pix.scaled(self.palm_preview.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
                 self.palm_preview_progress.setVisible(False)
+            elif mode == 'kapok':
+                self.kapok_preview.setPixmap(pix.scaled(self.kapok_preview.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                self.kapok_preview_progress.setVisible(False)
         except Exception as e:
             print('Error converting preview image:', e)
 
@@ -1445,6 +1783,10 @@ class TreegenQtMain(QWidget):
                     self.palm_preview_progress.setVisible(False)
                 except Exception:
                     pass
+                try:
+                    self.kapok_preview_progress.setVisible(False)
+                except Exception:
+                    pass
                 return
             print('Preview generation error:', msg)
             try:
@@ -1459,7 +1801,7 @@ class TreegenQtMain(QWidget):
         try:
             about_text = (
                 "Voxel Tree Generator Studio (PyQt6)\n"
-                "Version 1.5.2\n\n"
+                "Version 1.5.3\n\n"
                 "Made by NGNT Creations\n"
                 "Preview and export voxel trees using the treegen-pinegen library.\n"
                 "https://github.com/NGNT/treegen-pinegen"
@@ -1476,7 +1818,7 @@ class TreegenQtMain(QWidget):
         # disable or enable top-level tab contents (excluding preview QLabel)
         for child in tab_widget.findChildren(QWidget):
             # keep preview labels enabled so user sees the image
-            if isinstance(child, QLabel) and (child is getattr(self, 'tree_preview', None) or child is getattr(self, 'pine_preview', None) or child is getattr(self, 'birch_preview', None) or child is getattr(self, 'palm_preview', None)):
+            if isinstance(child, QLabel) and (child is getattr(self, 'tree_preview', None) or child is getattr(self, 'pine_preview', None) or child is getattr(self, 'birch_preview', None) or child is getattr(self, 'palm_preview', None) or child is getattr(self, 'kapok_preview', None)):
                 continue
             try:
                 child.setDisabled(disable)
@@ -1580,20 +1922,20 @@ class TreegenQtMain(QWidget):
         params = {
             'size': size,
             'twisted': self._map_slider_to_range(self.birch_twist_slider.value(), 0, 1000, 0.0, 1.0),
-            'trunksize': self._map_slider_to_range(self.birch_trunk_slider.value(), 0, 1000, 0.1, 1.2),
-            'trunkheight': 1.0,
-            'branchdensity': 1.0,
-            'branchlength': 1.0,
-            'branchdir': -0.5,
+            'bend': self._map_slider_to_range(self.birch_bend_slider.value(), 0, 1000, 0.0, 1.0),
+            'trunksize': self._map_slider_to_range(self.birch_trunk_slider.value(), 0, 1000, 0.05, 3.0),
+            'trunkheight': self._map_slider_to_range(self.birch_trunkheight_slider.value(), 0, 1000, 0.0, 5.0) if hasattr(self, 'birch_trunkheight_slider') else 1.0,
+            'branchdensity': self._map_slider_to_range(self.birch_branchdensity_slider.value(), 0, 1000, 0.0, 3.0),
+            'branchlength': self._map_slider_to_range(self.birch_branchlength_slider.value(), 0, 1000, 0.0, 3.0),
+            'branchdir': self._map_slider_to_range(self.birch_branchdir_slider.value(), 0, 1000, -5.0, 5.0),
             'leaves': self._map_slider_to_range(self.birch_leaves_slider.value(), 0.0, 1000, 0.0, 3.0),
-            'leaf_radius': 2.0,
-            'leaf_stretch': 1.5,
-            'leaf_bias': -0.3,
+            'leaf_radius': self._map_slider_to_range(self.birch_leaf_radius_slider.value(), 0, 1000, 1.0, 4.0),
+            'leaf_stretch': self._map_slider_to_range(self.birch_leaf_stretch_slider.value(), 0, 1000, 0.5, 3.0),
+            'leaf_gravity': self._map_slider_to_range(self.birch_leaf_gravity_slider.value(), 0, 1000, -1.0, 1.0),
+            'wide': self._map_slider_to_range(self.birch_wide_slider.value(), 0, 1000, 0.0, 1.0),
+            'spread': self._map_slider_to_range(self.birch_spread_slider.value(), 0, 1000, 0.0, 1.0),
             'seed': int(self._map_slider_to_range(self.birch_seed_slider.value(), 0, 1000, 1, 9999)),
             'iterations': self.birch_iterations_spin.value(),
-            'spread': self._map_slider_to_range(self.birch_spread_slider.value(), 0, 1000, 0.0, 1.0),
-            'gravity': self._map_slider_to_range(self.birch_gravity_slider.value(), 0, 1000, -1.0, 1.0),
-            'wide': self._map_slider_to_range(self.birch_wide_slider.value(), 0, 1000, 0.0, 1.0)
         }
         palette = self.birch_palette_combo.currentText() if self.birch_palette_combo.count() > 0 else ''
         self.birch_progress.setVisible(True)
@@ -1601,6 +1943,7 @@ class TreegenQtMain(QWidget):
         self._disable_tab_controls(self.birch_tab, True)
         future = self._export_executor.submit(export_birch, params, palette)
         future.add_done_callback(lambda f, m='birch': self._handle_export_future(f, m))
+
     def _on_palm_generate(self):
         if not PALM_AVAILABLE:
             QMessageBox.critical(self, 'Error', 'Palm core not available')
@@ -1625,6 +1968,47 @@ class TreegenQtMain(QWidget):
         self._disable_tab_controls(self.palm_tab, True)
         future = self._export_executor.submit(export_palm, params, palette)
         future.add_done_callback(lambda f, m='palm': self._handle_export_future(f, m))
+
+    def _on_kapok_generate(self):
+        if not KAPOK_AVAILABLE:
+            QMessageBox.critical(self, 'Error', 'Kapok core not available')
+            return
+
+        params = {
+            'size': self._map_slider_to_range(self.kapok_size_slider.value(), 0, 1000, 0.1, 3.0),
+            'trunkextend': self._map_slider_to_range(self.kapok_trunkextend_slider.value(), 0, 1000, 0.0, 340.0),
+            'trunksize': self._map_slider_to_range(self.kapok_trunksize_slider.value(), 0, 1000, 0.3, 4.0),
+            'trunkiter': int(self._map_slider_to_range(self.kapok_trunkiter_slider.value(), 0, 1000, 8, 40)),
+            'bend': self._map_slider_to_range(self.kapok_bend_slider.value(), 0, 1000, 0.0, 1.0),
+            'roottwist': self._map_slider_to_range(self.kapok_roottwist_slider.value(), 0, 1000, 0.0, 1.0),
+            'rootprofile': self._map_slider_to_range(self.kapok_rootprofile_slider.value(), 0, 1000, 0.0, 1.0),
+            'rootspread': self._map_slider_to_range(self.kapok_rootspread_slider.value(), 0, 1000, 0.0, 1.0),
+            'rootcount': int(self.kapok_rootcount_spin.value()),
+            'rootvariance': self._map_slider_to_range(self.kapok_rootvariance_slider.value(), 0, 1000, 0.0, 1.0),
+            'canopyiter': int(self.kapok_canopyiter_spin.value()),
+            'wide': self._map_slider_to_range(self.kapok_wide_slider.value(), 0, 1000, 0.0, 1.0),
+            'spread': self._map_slider_to_range(self.kapok_spread_slider.value(), 0, 1000, 0.0, 1.0),
+            'canopytwist': self._map_slider_to_range(self.kapok_canopytwist_slider.value(), 0, 1000, 0.0, 1.0),
+            'leaves': self._map_slider_to_range(self.kapok_leaves_slider.value(), 0, 1000, 0.0, 3.0),
+            'gravity': self._map_slider_to_range(self.kapok_gravity_slider.value(), 0, 1000, -1.0, 1.0),
+            'canopythick': self._map_slider_to_range(self.kapok_canopythick_slider.value(), 0, 1000, 0.0, 1.0),
+            'canopyprofile': self._map_slider_to_range(self.kapok_canopyprofile_slider.value(), 0, 1000, 0.0, 1.0),
+            'canopyflat': self._map_slider_to_range(self.kapok_canopyflat_slider.value(), 0, 1000, 0.0, 1.0),
+            'canopystart': self._map_slider_to_range(self.kapok_canopystart_slider.value(), 0, 1000, 0.0, 1.0),
+            'seed': int(self._map_slider_to_range(self.kapok_seed_slider.value(), 0, 1000, 1, 9999)),
+        }
+
+        palette = self.kapok_palette_combo.currentText() if self.kapok_palette_combo.count() > 0 else ''
+
+        # prepare UI
+        self.kapok_progress.setVisible(True)
+        self.kapok_progress.setRange(0, 0)  # indeterminate
+        self._disable_tab_controls(self.kapok_tab, True)
+
+        # submit export task
+        future = self._export_executor.submit(export_kapok, params, palette)
+        future.add_done_callback(lambda f, m='kapok': self._handle_export_future(f, m))
+
     def _handle_export_future(self, future, mode):
         try:
             filename = future.result()
@@ -1719,6 +2103,26 @@ class TreegenQtMain(QWidget):
                         subprocess.call(["xdg-open", filename])
                 except Exception:
                     pass
+        elif mode == 'kapok':
+            self.kapok_progress.setVisible(False)
+            self._disable_tab_controls(self.kapok_tab, False)
+            self.kapok_generate_btn.setEnabled(True)
+            try:
+                self.kapok_dim_label.setText(f'Generated: {filename}')
+            except Exception:
+                pass
+            if self.kapok_open_after.isChecked():
+                try:
+                    if sys.platform.startswith('win'):
+                        os.startfile(filename)
+                    elif sys.platform == 'darwin':
+                        import subprocess
+                        subprocess.call(["open", filename])
+                    else:
+                        import subprocess
+                        subprocess.call(["xdg-open", filename])
+                except Exception:
+                    pass
 
     def _on_export_failed(self, mode, error_msg):
         if mode == 'tree':
@@ -1737,6 +2141,10 @@ class TreegenQtMain(QWidget):
             self.palm_progress.setVisible(False)
             self._disable_tab_controls(self.palm_tab, False)
             self.palm_generate_btn.setEnabled(True)
+        elif mode == 'kapok':
+            self.kapok_progress.setVisible(False)
+            self._disable_tab_controls(self.kapok_tab, False)
+            self.kapok_generate_btn.setEnabled(True)
         QMessageBox.critical(self, 'Export Failed', f'Export failed with error:\n{error_msg}')
 
     def cleanup(self):
@@ -1882,12 +2290,20 @@ class TreegenQtMain(QWidget):
 
         set_slider_from_range(self.birch_size_slider, self.birch_size_range)
         set_slider_from_range(self.birch_trunk_slider, self.birch_trunk_range)
+        set_slider_from_range(self.birch_trunkheight_slider, self.birch_trunkheight_range)
         set_slider_from_range(self.birch_spread_slider, self.birch_spread_range)
-        set_slider_from_range(self.birch_twist_slider, self.birch_twist_range)
+        set_slider_from_range(self.birch_branchdensity_slider, self.birch_branchdensity_range)
+        set_slider_from_range(self.birch_branchlength_slider, self.birch_branchlength_range)
+        set_slider_from_range(self.birch_branchdir_slider, self.birch_branchdir_range)
         set_slider_from_range(self.birch_leaves_slider, self.birch_leaves_range)
-        set_slider_from_range(self.birch_gravity_slider, self.birch_gravity_range)
-        set_slider_from_range(self.birch_wide_slider, self.birch_wide_range)
-        self.birch_iterations_spin.setValue(random.randint(self.birch_iterations_spin.minimum(), self.birch_iterations_spin.maximum()))
+        set_slider_from_range(self.birch_leaf_radius_slider, self.birch_leaf_radius_range)
+        set_slider_from_range(self.birch_leaf_stretch_slider, self.birch_leaf_stretch_range)
+        set_slider_from_range(self.birch_leaf_gravity_slider, self.birch_leaf_gravity_range)
+        set_slider_from_range(self.birch_bend_slider, self.birch_bend_range)
+        try:
+            self.birch_iterations_spin.setValue(random.randint(self.birch_iterations_spin.minimum(), self.birch_iterations_spin.maximum()))
+        except Exception:
+            pass
         set_slider_from_range(self.birch_seed_slider, self.birch_seed_range)
         self.birch_preview_timer.start(50)
     
@@ -1911,6 +2327,53 @@ class TreegenQtMain(QWidget):
         set_slider_from_range(self.palm_seed_slider, self.palm_seed_range)
         self.palm_preview_timer.start(50)
 
+    def _randomize_kapok_sliders(self):
+        def set_slider_from_range(slider, r):
+            amin, amax = r
+            v = random.uniform(amin, amax)
+            t = int(round((v - amin) / (amax - amin) * 1000)) if amax != amin else 0
+            slider.setValue(max(0, min(1000, t)))
+
+        set_slider_from_range(self.kapok_size_slider, self.kapok_size_range)
+        set_slider_from_range(self.kapok_trunkextend_slider, self.kapok_trunkextend_range)
+        set_slider_from_range(self.kapok_trunksize_slider, self.kapok_trunksize_range)
+        set_slider_from_range(self.kapok_trunkiter_slider, self.kapok_trunkiter_range)
+        set_slider_from_range(self.kapok_bend_slider, self.kapok_bend_range)
+
+        set_slider_from_range(self.kapok_roottwist_slider, self.kapok_roottwist_range)
+        set_slider_from_range(self.kapok_rootprofile_slider, self.kapok_rootprofile_range)
+        set_slider_from_range(self.kapok_rootspread_slider, self.kapok_rootspread_range)
+        # root count is a QSpinBox
+        try:
+            self.kapok_rootcount_spin.setValue(random.randint(self.kapok_rootcount_spin.minimum(), self.kapok_rootcount_spin.maximum()))
+        except Exception:
+            pass
+        set_slider_from_range(self.kapok_rootvariance_slider, self.kapok_rootvariance_range)
+
+        # canopy
+        try:
+            self.kapok_canopyiter_spin.setValue(random.randint(self.kapok_canopyiter_spin.minimum(), self.kapok_canopyiter_spin.maximum()))
+        except Exception:
+            pass
+        set_slider_from_range(self.kapok_wide_slider, self.kapok_wide_range)
+        set_slider_from_range(self.kapok_spread_slider, self.kapok_spread_range)
+        set_slider_from_range(self.kapok_canopytwist_slider, self.kapok_canopytwist_range)
+        set_slider_from_range(self.kapok_leaves_slider, self.kapok_leaves_range)
+        set_slider_from_range(self.kapok_gravity_slider, self.kapok_gravity_range)
+        set_slider_from_range(self.kapok_canopythick_slider, self.kapok_canopythick_range)
+        set_slider_from_range(self.kapok_canopyprofile_slider, self.kapok_canopyprofile_range)
+        set_slider_from_range(self.kapok_canopyflat_slider, self.kapok_canopyflat_range)
+        set_slider_from_range(self.kapok_canopystart_slider, self.kapok_canopystart_range)
+
+        # seed
+        set_slider_from_range(self.kapok_seed_slider, self.kapok_seed_range)
+
+        # trigger preview
+        try:
+            self.kapok_preview_timer.start(50)
+        except Exception:
+            pass
+
     def _on_tab_changed(self, index):
         # Stop all previews when switching tabs
         try:
@@ -1918,6 +2381,7 @@ class TreegenQtMain(QWidget):
             self.pine_preview_timer.stop()
             self.birch_preview_timer.stop()
             self.palm_preview_timer.stop()
+            self.kapok_preview_timer.stop()
         except Exception:
             pass
 
@@ -1931,6 +2395,8 @@ class TreegenQtMain(QWidget):
                 self.birch_preview_timer.start(100)
             elif index == 3:  # Palmgen tab
                 self.palm_preview_timer.start(100)
+            elif index == 4:  # Kapokgen tab
+                self.kapok_preview_timer.start(100)
         except Exception:
             pass
 
