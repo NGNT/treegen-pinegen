@@ -1061,7 +1061,7 @@ class TreegenQtMain(QWidget):
         try:
             if palette_worker is not None and hasattr(palette_worker, '_palette_manager'):
                 all_files = palette_worker._palette_manager.list_palettes()
-                palm_palettes = [p for p in all_files if 'palm' in p.lower() or 'tropical' in p.lower()]
+                palm_palettes = [p for p in all_files if 'palm' in p.lower()]
             else:
                 palm_palette_dir = resource_path(os.path.join("palettes","palm"))
                 palm_palettes = [f for f in os.listdir(palm_palette_dir) if f.endswith('.png')]
