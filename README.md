@@ -60,6 +60,10 @@ Built with Python, NumPy, and Pillow. The project uses a PyQt6 GUI (`treegen_qt.
 - Frond colour mapping
   - Leaf voxels are now mapped to palette indices based on their fractional position along each frond (t01) so frond mid-lengths read darker and tips read lighter. This produces a natural dark band down the centre of fronds and a smooth outward-lightening gradient.
 
+- Complete birchgen rework:
+  - birch generator now builds tress in a new, more natural way
+  - low trunk thickness and leaf bundles at the end o branches are the main implementations
+
 ## Controls (implemented in the PyQt UI)
 
 Treegen sliders/controls and ranges:
